@@ -156,43 +156,41 @@ client.connectionState.collect { state ->
 if (client.connectionState.value == ConnectionState.CONNECTED) { /* ... */ }
 ```
 
-### Auto-Reconnect with Offline Queue
+### Auto-Reconnect & Reconnect Strategy
+
+When the connection drops unexpectedly, the client can automatically reconnect
+using a configurable **reconnect strategy**. On success it re-subscribes to all
+previously active topics and flushes any messages that were queued while offline.
+
+#### Quick start (shorthand properties)
 
 ```kotlin
 val client = MqttClient {
     host = "broker.example.com"
     clientId = "reliable-client"
-
-    // Enable auto-reconnect with exponential backoff
     autoReconnect = true
-    reconnectDelay = 1.seconds         // initial delay
+
+    // Shorthand — builds an ExponentialBackoff under the hood
+    reconnectDelay = 1.seconds         // initial delay (doubles each attempt)
     maxReconnectDelay = 60.seconds     // cap for exponential backoff
     maxReconnectAttempts = 0           // 0 = unlimited
-
-    // Messages published while disconnected are queued and sent on reconnect
-    offlineQueueCapacity = 100         // 0 = unlimited
-}
-
-// Publish even while disconnected — it will be queued and sent later
-client.publish("sensor/temp", "22.5", QoS.AT_LEAST_ONCE)
-println("Queued messages: ${client.offlineQueueSize}")
-
-// Optional: monitor reconnection events
-client.onReconnecting = { attempt ->
-    println("Reconnecting... attempt $attempt")
-}
-client.onReconnected = {
-    println("Reconnected! Subscriptions and queued messages restored.")
 }
 ```
 
-### Custom Reconnect Strategy
+#### Built-in strategies
 
-The reconnection behavior is fully pluggable via `reconnectStrategy`. Three built-in
-strategies are provided, plus you can implement your own with a single lambda.
+Set `reconnectStrategy` for full control. When set, it takes precedence over the
+shorthand properties above.
+
+| Strategy | Behaviour |
+|---|---|
+| `ExponentialBackoff` | Delay doubles each attempt with optional random jitter (default) |
+| `ConstantDelay` | Fixed delay between every attempt |
+| `LinearBackoff` | Delay grows by a fixed step each attempt |
+| `ReconnectStrategy.None` | Never reconnect (useful with offline queue only) |
 
 ```kotlin
-// Exponential backoff with jitter (avoids thundering herd in IoT fleets)
+// Exponential backoff with jitter — avoids thundering herd in IoT fleets
 val client = MqttClient {
     host = "broker.example.com"
     autoReconnect = true
@@ -200,7 +198,7 @@ val client = MqttClient {
         initialDelay = 1.seconds,
         maxDelay = 30.seconds,
         maxAttempts = 20,
-        jitterFactor = 0.25,   // adds up to 25% random jitter
+        jitterFactor = 0.25,   // adds up to 25 % random jitter
     )
 }
 
@@ -211,7 +209,7 @@ val client = MqttClient {
     reconnectStrategy = ConstantDelay(delay = 5.seconds, maxAttempts = 10)
 }
 
-// Linear backoff: 1s, 3s, 5s, 7s, … up to 30s
+// Linear backoff: 1 s, 3 s, 5 s, 7 s, … capped at 30 s
 val client = MqttClient {
     host = "broker.example.com"
     autoReconnect = true
@@ -221,23 +219,53 @@ val client = MqttClient {
         maxDelay = 30.seconds,
     )
 }
+```
 
-// Fully custom: inspect the cause to decide whether to retry
+#### Fully custom strategy (SAM lambda)
+
+Implement `ReconnectStrategy` with a single lambda. Return the delay before the
+next attempt, or `null` to stop reconnecting.
+
+```kotlin
 val client = MqttClient {
     host = "broker.example.com"
     autoReconnect = true
     reconnectStrategy = ReconnectStrategy { attempt, cause ->
-        // Server explicitly refused — stop immediately
+        // Server explicitly refused — don't bother retrying
         if (cause is MqttConnectException) null
-        // Otherwise linear 2s, 4s, 6s … capped at 30s
+        // Transient error — linear 2 s, 4 s, 6 s … capped at 30 s
         else (attempt * 2).seconds.coerceAtMost(30.seconds)
     }
 }
 ```
 
-> **Backward compatible**: if you don't set `reconnectStrategy`, the existing
-> `reconnectDelay` / `maxReconnectDelay` / `maxReconnectAttempts` properties
-> still work and automatically build an `ExponentialBackoff` under the hood.
+#### Offline message queue
+
+Messages published while disconnected are buffered and sent automatically once
+the connection is restored.
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    offlineQueueCapacity = 100   // 0 = unlimited; drops oldest when full
+}
+
+// Works even while disconnected
+client.publish("sensor/temp", "22.5", QoS.AT_LEAST_ONCE)
+println("Queued: ${client.offlineQueueSize}")
+```
+
+#### Reconnection callbacks
+
+```kotlin
+client.onReconnecting = { attempt ->
+    println("Reconnecting… attempt $attempt")
+}
+client.onReconnected = {
+    println("Reconnected! Subscriptions and queued messages restored.")
+}
+```
 
 ### Connect Timeout
 

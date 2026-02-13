@@ -264,10 +264,14 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     val state = Qos2OutboundState(msg.packet)
                     state.pubrecReceived = true
                     sessionState.addPendingQos2Outbound(msg.packetId, state)
-                    connection.sendPacket(PubrelPacket(msg.packetId))
+                    try {
+                        connection.sendPacket(PubrelPacket(msg.packetId))
+                    } catch (e: Exception) {
+                        sessionState.removePendingQos2Outbound(msg.packetId)
+                        throw e
+                    }
                     sessionState.sendQuota--
                     logger?.debug(TAG) { "Resent PUBREL for packet ${msg.packetId}" }
-                    // Launch background coroutine to clean up when ack arrives
                     clientScope?.launch {
                         try { state.deferred.await() } catch (_: Exception) {}
                         finally { sessionState.sendQuota++; packetIdManager.release(msg.packetId) }
@@ -277,7 +281,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     val dupPacket = msg.packet.copy(dup = true)
                     val state = Qos2OutboundState(dupPacket)
                     sessionState.addPendingQos2Outbound(msg.packetId, state)
-                    connection.sendPacket(dupPacket)
+                    try {
+                        connection.sendPacket(dupPacket)
+                    } catch (e: Exception) {
+                        sessionState.removePendingQos2Outbound(msg.packetId)
+                        throw e
+                    }
                     sessionState.sendQuota--
                     logger?.debug(TAG) { "Resent PUBLISH (DUP) QoS 2 for packet ${msg.packetId}" }
                     clientScope?.launch {
@@ -289,7 +298,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     val dupPacket = msg.packet.copy(dup = true)
                     val pending = PendingPublish(dupPacket)
                     sessionState.addPendingPuback(msg.packetId, pending)
-                    connection.sendPacket(dupPacket)
+                    try {
+                        connection.sendPacket(dupPacket)
+                    } catch (e: Exception) {
+                        sessionState.completePuback(msg.packetId)
+                        throw e
+                    }
                     sessionState.sendQuota--
                     logger?.debug(TAG) { "Resent PUBLISH (DUP) QoS 1 for packet ${msg.packetId}" }
                     clientScope?.launch {
@@ -316,13 +330,13 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     suspend fun subscribe(subscriptions: List<Subscription>): List<ReasonCode> {
         require(isConnected) { "Not connected" }; require(subscriptions.isNotEmpty()) { "At least one subscription required" }
         val packetId = packetIdManager.allocate()
-        val deferred = CompletableDeferred<SubackPacket>(); sessionState.pendingSuback[packetId] = deferred
+        val deferred = CompletableDeferred<SubackPacket>(); sessionState.addPendingSuback(packetId, deferred)
         connection.sendPacket(SubscribePacket(packetId = packetId, subscriptions = subscriptions.map { it.topicFilter to it.options }))
         try {
             val suback = deferred.await()
             for ((i, sub) in subscriptions.withIndex()) { val rc = suback.reasonCodes.getOrNull(i); if (rc != null && !rc.isError) sessionState.subscriptions[sub.topicFilter] = sub.options.qos }
             return suback.reasonCodes
-        } finally { sessionState.pendingSuback.remove(packetId); packetIdManager.release(packetId) }
+        } finally { sessionState.removePendingSuback(packetId); packetIdManager.release(packetId) }
     }
 
     suspend fun subscribe(topicFilter: String, qos: QoS = QoS.AT_MOST_ONCE): ReasonCode =
@@ -331,14 +345,14 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     suspend fun unsubscribe(topicFilters: List<String>): List<ReasonCode> {
         require(isConnected) { "Not connected" }; require(topicFilters.isNotEmpty()) { "At least one topic filter required" }
         val packetId = packetIdManager.allocate()
-        val deferred = CompletableDeferred<UnsubackPacket>(); sessionState.pendingUnsuback[packetId] = deferred
+        val deferred = CompletableDeferred<UnsubackPacket>(); sessionState.addPendingUnsuback(packetId, deferred)
         connection.sendPacket(UnsubscribePacket(packetId = packetId, topicFilters = topicFilters))
         try {
             val unsuback = deferred.await()
             for ((i, f) in topicFilters.withIndex()) { val rc = unsuback.reasonCodes.getOrNull(i); if (rc != null && !rc.isError) sessionState.subscriptions.remove(f) }
             return unsuback.reasonCodes
         }
-        finally { sessionState.pendingUnsuback.remove(packetId); packetIdManager.release(packetId) }
+        finally { sessionState.removePendingUnsuback(packetId); packetIdManager.release(packetId) }
     }
 
     suspend fun unsubscribe(topicFilter: String): ReasonCode = unsubscribe(listOf(topicFilter)).first()
@@ -364,8 +378,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             is PubrecPacket -> { val s = sessionState.getPendingQos2Outbound(packet.packetId) ?: return; if (packet.reasonCode.isError) { sessionState.removePendingQos2Outbound(packet.packetId); s.deferred.completeExceptionally(MqttPublishException(packet.reasonCode)) } else { s.pubrecReceived = true; connection.sendPacket(PubrelPacket(packet.packetId)) } }
             is PubrelPacket -> { sessionState.removePendingQos2Inbound(packet.packetId); connection.sendPacket(PubcompPacket(packet.packetId)) }
             is PubcompPacket -> { val s = sessionState.getPendingQos2Outbound(packet.packetId) ?: return; sessionState.removePendingQos2Outbound(packet.packetId); s.deferred.complete(Unit) }
-            is SubackPacket -> sessionState.pendingSuback[packet.packetId]?.complete(packet)
-            is UnsubackPacket -> sessionState.pendingUnsuback[packet.packetId]?.complete(packet)
+            is SubackPacket -> sessionState.completePendingSuback(packet.packetId, packet)
+            is UnsubackPacket -> sessionState.completePendingUnsuback(packet.packetId, packet)
             PingrespPacket -> {}
             is DisconnectPacket -> handleServerDisconnect(packet)
             is AuthPacket -> { val h = onAuth ?: return; val r = h(packet); if (r != null) connection.sendPacket(r) }
@@ -405,10 +419,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
 
         // Fail all pending operations under the mutex
         failPendingQosMessages(MqttConnectionException("Connection lost", cause))
-        // Suback/unsuback deferreds are only accessed from the read loop (single coroutine),
-        // but clear them too for completeness.
-        sessionState.pendingSuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
-        sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
+        sessionState.failPendingSubackAndUnsuback(MqttConnectionException("Connection lost", cause))
 
         if (config.autoReconnect && !userDisconnected) { _connectionState.value = ConnectionState.RECONNECTING; clientScope?.launch { attemptReconnect(cause) } }
         else _connectionState.value = ConnectionState.DISCONNECTED

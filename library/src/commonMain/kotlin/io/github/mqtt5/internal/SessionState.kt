@@ -27,10 +27,10 @@ internal class SessionState {
     val pendingQos2Inbound = mutableSetOf<Int>()
 
     /** Pending subscribe acknowledgements. */
-    val pendingSuback = mutableMapOf<Int, CompletableDeferred<SubackPacket>>()
+    private val pendingSuback = mutableMapOf<Int, CompletableDeferred<SubackPacket>>()
 
     /** Pending unsubscribe acknowledgements. */
-    val pendingUnsuback = mutableMapOf<Int, CompletableDeferred<UnsubackPacket>>()
+    private val pendingUnsuback = mutableMapOf<Int, CompletableDeferred<UnsubackPacket>>()
 
     /** Active subscriptions: topicFilter -> QoS. */
     val subscriptions = mutableMapOf<String, QoS>()
@@ -87,6 +87,40 @@ internal class SessionState {
 
     suspend fun isPendingQos2Inbound(packetId: Int): Boolean = mutex.withLock {
         packetId in pendingQos2Inbound
+    }
+
+    suspend fun addPendingSuback(packetId: Int, deferred: CompletableDeferred<SubackPacket>) = mutex.withLock {
+        pendingSuback[packetId] = deferred
+    }
+
+    suspend fun completePendingSuback(packetId: Int, packet: SubackPacket) = mutex.withLock {
+        pendingSuback[packetId]?.complete(packet)
+    }
+
+    suspend fun removePendingSuback(packetId: Int) = mutex.withLock {
+        pendingSuback.remove(packetId)
+    }
+
+    suspend fun addPendingUnsuback(packetId: Int, deferred: CompletableDeferred<UnsubackPacket>) = mutex.withLock {
+        pendingUnsuback[packetId] = deferred
+    }
+
+    suspend fun completePendingUnsuback(packetId: Int, packet: UnsubackPacket) = mutex.withLock {
+        pendingUnsuback[packetId]?.complete(packet)
+    }
+
+    suspend fun removePendingUnsuback(packetId: Int) = mutex.withLock {
+        pendingUnsuback.remove(packetId)
+    }
+
+    /**
+     * Fail all pending subscribe/unsubscribe deferreds and clear the maps.
+     */
+    suspend fun failPendingSubackAndUnsuback(error: Exception) = mutex.withLock {
+        pendingSuback.values.forEach { it.completeExceptionally(error) }
+        pendingUnsuback.values.forEach { it.completeExceptionally(error) }
+        pendingSuback.clear()
+        pendingUnsuback.clear()
     }
 
     /**
