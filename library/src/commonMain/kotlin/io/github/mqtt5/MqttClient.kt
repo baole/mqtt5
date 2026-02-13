@@ -127,6 +127,13 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                 throw MqttProtocolException("Enhanced auth handler returned null — authentication incomplete")
             }
         }
+        // Loop exited without receiving CONNACK — the server sent an AUTH with a
+        // non-CONTINUE reason code, which is not a valid way to complete the
+        // connect-phase handshake (MQTT v5 §4.12 requires CONNACK to finish).
+        connection.close()
+        throw MqttProtocolException(
+            "Enhanced authentication ended without CONNACK (last AUTH reason: ${currentAuth?.reasonCode})"
+        )
     }
 
     suspend fun disconnect(reasonCode: ReasonCode = ReasonCode.NORMAL_DISCONNECTION, sessionExpiryInterval: Long? = null) {
@@ -203,7 +210,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                 val dropped = offlineQueue.removeFirst()
                 logger?.warn(TAG) { "Offline queue full ($cap), dropped oldest message for '${dropped.topic}'" }
             }
-            offlineQueue.addLast(PendingOfflinePublish(topic, payload, qos, retain, properties))
+            offlineQueue.addLast(PendingOfflinePublish(topic, payload, qos, retain, properties.copy()))
         }
         logger?.debug(TAG) { "Queued offline message for '$topic' (queue size: ${offlineQueue.size})" }
     }

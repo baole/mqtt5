@@ -111,13 +111,15 @@ internal class SessionState {
     /**
      * Fail all pending QoS 1/2 deferreds exceptionally and clear the maps.
      * Must be called under the mutex to avoid races with the read loop.
+     * NOTE: does NOT clear inflightForRetry — those messages were saved by
+     * saveInflightForRetry() BEFORE this call and must survive until
+     * retryInflightMessages() processes them on the next successful connect.
      */
     suspend fun failAndClearPending(error: Exception) = mutex.withLock {
         pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
         pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
         pendingPuback.clear()
         pendingQos2Outbound.clear()
-        inflightForRetry = emptyList()
     }
 
     fun updateFromConnack(connack: ConnackPacket) {
