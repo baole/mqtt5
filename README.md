@@ -41,11 +41,9 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.baole:kmqtt5:<latest-version>")
+    implementation("io.github.baole:kmqtt5:1.0.0")
 }
 ```
-
-Replace `<latest-version>` with the version published on [Maven Central](https://central.sonatype.com/artifact/io.github.baole/kmqtt5).
 
 ### Kotlin Multiplatform
 
@@ -55,7 +53,7 @@ For Kotlin Multiplatform projects, add the dependency in the `commonMain` source
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.baole:kmqtt5:<latest-version>")
+            implementation("io.github.baole:kmqtt5:1.0.0")
         }
     }
 }
@@ -65,7 +63,7 @@ kotlin {
 
 ```toml
 [versions]
-kmqtt5 = "<latest-version>"
+kmqtt5 = "1.0.0"
 
 [libraries]
 kmqtt5 = { module = "io.github.baole:kmqtt5", version.ref = "kmqtt5" }
