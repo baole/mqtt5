@@ -410,23 +410,25 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         sessionState.pendingSuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
         sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
 
-        if (config.autoReconnect && !userDisconnected) { _connectionState.value = ConnectionState.RECONNECTING; clientScope?.launch { attemptReconnect() } }
+        if (config.autoReconnect && !userDisconnected) { _connectionState.value = ConnectionState.RECONNECTING; clientScope?.launch { attemptReconnect(cause) } }
         else _connectionState.value = ConnectionState.DISCONNECTED
     }
 
-    private suspend fun attemptReconnect() {
+    private suspend fun attemptReconnect(connectionLostCause: Throwable?) {
         if (isReconnecting) return; isReconnecting = true
-        val maxAttempts = config.maxReconnectAttempts; var attempt = 0; var currentDelay = config.reconnectDelay
-        logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts" }
+        val strategy = config.effectiveReconnectStrategy()
+        var attempt = 0
+        logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts (strategy: ${strategy::class.simpleName})" }
         try {
             while (true) {
                 attempt++
-                if (maxAttempts > 0 && attempt > maxAttempts) {
-                    logger?.error(TAG) { "Max reconnect attempts ($maxAttempts) reached" }
-                    failPendingQosMessages(MqttConnectionException("Max reconnect attempts reached"))
+                val waitDuration = strategy.nextDelay(attempt, connectionLostCause)
+                if (waitDuration == null) {
+                    logger?.error(TAG) { "Reconnect strategy returned null at attempt $attempt — giving up" }
+                    failPendingQosMessages(MqttConnectionException("Reconnect strategy stopped after $attempt attempts"))
                     _connectionState.value = ConnectionState.DISCONNECTED; break
                 }
-                logger?.info(TAG) { "Reconnection attempt $attempt${if (maxAttempts > 0) "/$maxAttempts" else ""}" }
+                logger?.info(TAG) { "Reconnection attempt $attempt (next delay: $waitDuration)" }
                 onReconnecting?.invoke(attempt)
                 try {
                     keepAliveJob?.cancel(); readJob?.cancel(); connection.close()
@@ -437,7 +439,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     logger?.info(TAG) { "Reconnected successfully" }; onReconnected?.invoke(); return
                 } catch (e: CancellationException) { throw e }
                 catch (e: Exception) { logger?.warn(TAG) { "Reconnection attempt $attempt failed: ${e.message}" }; _connectionState.value = ConnectionState.RECONNECTING }
-                delay(currentDelay); currentDelay = (currentDelay * 2).coerceAtMost(config.maxReconnectDelay)
+                delay(waitDuration)
             }
         } finally { isReconnecting = false }
     }

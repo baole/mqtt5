@@ -108,14 +108,57 @@ class MqttConfig {
     /** Whether to automatically reconnect on connection loss. */
     var autoReconnect: Boolean = false
 
-    /** Initial delay between reconnection attempts. Increases with exponential backoff. */
+    /**
+     * Strategy that controls reconnection timing and stopping criteria.
+     *
+     * When set, this takes precedence over [reconnectDelay], [maxReconnectDelay],
+     * and [maxReconnectAttempts]. If `null` (default), an [ExponentialBackoff] strategy
+     * is built automatically from those three properties for backward compatibility.
+     *
+     * ```kotlin
+     * // Exponential backoff with jitter (avoid thundering herd)
+     * reconnectStrategy = ExponentialBackoff(
+     *     initialDelay = 1.seconds,
+     *     maxDelay = 30.seconds,
+     *     jitterFactor = 0.25,
+     * )
+     *
+     * // Constant 5-second delay, max 10 attempts
+     * reconnectStrategy = ConstantDelay(delay = 5.seconds, maxAttempts = 10)
+     *
+     * // Fully custom logic via SAM interface
+     * reconnectStrategy = ReconnectStrategy { attempt, cause ->
+     *     if (cause is MqttConnectException) null else (attempt * 2).seconds
+     * }
+     * ```
+     */
+    var reconnectStrategy: ReconnectStrategy? = null
+
+    /** Initial delay between reconnection attempts. Increases with exponential backoff.
+     *  Ignored when [reconnectStrategy] is set explicitly. */
     var reconnectDelay: Duration = 1.seconds
 
-    /** Maximum delay between reconnection attempts (caps exponential backoff). */
+    /** Maximum delay between reconnection attempts (caps exponential backoff).
+     *  Ignored when [reconnectStrategy] is set explicitly. */
     var maxReconnectDelay: Duration = 60.seconds
 
-    /** Maximum number of reconnection attempts. 0 means unlimited. */
+    /** Maximum number of reconnection attempts. 0 means unlimited.
+     *  Ignored when [reconnectStrategy] is set explicitly. */
     var maxReconnectAttempts: Int = 0
+
+    /**
+     * Resolves the effective [ReconnectStrategy].
+     *
+     * Returns the explicitly set [reconnectStrategy], or builds a default
+     * [ExponentialBackoff] from [reconnectDelay], [maxReconnectDelay], and
+     * [maxReconnectAttempts] for backward compatibility.
+     */
+    internal fun effectiveReconnectStrategy(): ReconnectStrategy =
+        reconnectStrategy ?: ExponentialBackoff(
+            initialDelay = reconnectDelay,
+            maxDelay = maxReconnectDelay,
+            maxAttempts = maxReconnectAttempts,
+        )
 
     /**
      * Maximum number of messages to buffer when disconnected and [autoReconnect] is enabled.
