@@ -8,7 +8,7 @@ import io.github.mqtt5.SubscriptionOptions
 /**
  * Decodes wire-format byte arrays into [MqttPacket] instances.
  */
-object PacketDecoder {
+internal object PacketDecoder {
 
     /**
      * Decode a complete MQTT packet from its wire-format bytes.

@@ -5,7 +5,7 @@ import io.github.mqtt5.MqttProtocolException
 /**
  * MQTT v5.0 Property identifiers per Section 2.2.2.2, Table 2-4.
  */
-object PropertyId {
+internal object PropertyId {
     const val PAYLOAD_FORMAT_INDICATOR = 0x01           // Byte
     const val MESSAGE_EXPIRY_INTERVAL = 0x02            // Four Byte Integer
     const val CONTENT_TYPE = 0x03                        // UTF-8 Encoded String
@@ -105,7 +105,7 @@ class MqttProperties {
      * Encode all properties into an MqttEncoder.
      * The caller is responsible for writing the Property Length prefix.
      */
-    fun encodeTo(encoder: MqttEncoder) {
+    internal fun encodeTo(encoder: MqttEncoder) {
         payloadFormatIndicator?.let {
             encoder.writeVariableByteInteger(PropertyId.PAYLOAD_FORMAT_INDICATOR)
             encoder.writeByte(it)
@@ -219,7 +219,7 @@ class MqttProperties {
     /**
      * Encode properties and return the full wire format (Property Length + Properties).
      */
-    fun encode(): ByteArray {
+    internal fun encode(): ByteArray {
         val propsEncoder = MqttEncoder()
         encodeTo(propsEncoder)
         val propsBytes = propsEncoder.toByteArray()
@@ -255,7 +255,7 @@ class MqttProperties {
          * Decode properties from a decoder. Reads the Property Length first,
          * then parses all properties within that length.
          */
-        fun decode(decoder: MqttDecoder): MqttProperties {
+        internal fun decode(decoder: MqttDecoder): MqttProperties {
             val props = MqttProperties()
             val propertyLength = decoder.readVariableByteInteger()
             if (propertyLength == 0) return props

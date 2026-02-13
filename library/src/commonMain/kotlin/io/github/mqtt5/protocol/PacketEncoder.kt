@@ -7,7 +7,7 @@ import io.github.mqtt5.MqttProtocolException
  *
  * Each packet is encoded as: Fixed Header (type + flags + remaining length) + Variable Header + Payload.
  */
-object PacketEncoder {
+internal object PacketEncoder {
 
     /**
      * Encode an [MqttPacket] into its full wire-format byte array.

@@ -7,7 +7,7 @@ import io.github.mqtt5.MqttProtocolException
 /**
  * A growable byte buffer used to encode MQTT packet data.
  */
-class MqttEncoder {
+internal class MqttEncoder {
     private var buffer = ByteArray(256)
     private var position = 0
 
@@ -100,7 +100,7 @@ class MqttEncoder {
 /**
  * Reads MQTT-encoded data from a byte array with a movable cursor.
  */
-class MqttDecoder(private val data: ByteArray, private var position: Int = 0) {
+internal class MqttDecoder(private val data: ByteArray, private var position: Int = 0) {
     val remaining: Int get() = data.size - position
     val isExhausted: Boolean get() = position >= data.size
 
@@ -200,7 +200,7 @@ class MqttDecoder(private val data: ByteArray, private var position: Int = 0) {
 /**
  * Calculate the size of a Variable Byte Integer encoding.
  */
-fun variableByteIntegerSize(value: Int): Int {
+internal fun variableByteIntegerSize(value: Int): Int {
     require(value in 0..268_435_455)
     return when {
         value <= 127 -> 1
@@ -213,7 +213,7 @@ fun variableByteIntegerSize(value: Int): Int {
 /**
  * Encode a Variable Byte Integer to a byte array.
  */
-fun encodeVariableByteInteger(value: Int): ByteArray {
+internal fun encodeVariableByteInteger(value: Int): ByteArray {
     val encoder = MqttEncoder()
     encoder.writeVariableByteInteger(value)
     return encoder.toByteArray()
@@ -222,7 +222,7 @@ fun encodeVariableByteInteger(value: Int): ByteArray {
 /**
  * MQTT v5 Packet types (4-bit values in the fixed header).
  */
-enum class PacketType(val value: Int) {
+internal enum class PacketType(val value: Int) {
     CONNECT(1),
     CONNACK(2),
     PUBLISH(3),

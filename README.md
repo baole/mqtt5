@@ -1,5 +1,9 @@
 # KMQTT5 - Kotlin Multiplatform MQTT v5.0 Client Library
 
+[![Build & Test](https://github.com/baole/kmqtt5/actions/workflows/build.yml/badge.svg)](https://github.com/baole/kmqtt5/actions/workflows/build.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.baole/kmqtt5.svg)](https://central.sonatype.com/artifact/io.github.baole/kmqtt5)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.1.10-blue.svg)](https://kotlinlang.org)
+
 A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html), using [Ktor](https://ktor.io/) for networking. No third-party MQTT libraries are used.
 
 ## Features
@@ -27,34 +31,52 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
 - **Zero third-party MQTT dependencies**: the entire protocol is implemented from scratch
 
-## Project Structure
+## Installation
 
+Add the following to your `build.gradle.kts`:
+
+```kotlin
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation("io.github.baole:kmqtt5:<latest-version>")
+}
 ```
-kmqtt5/
-├── library/                    # The MQTT v5 library
-│   └── src/
-│       ├── commonMain/kotlin/io/github/mqtt5/
-│       │   ├── MqttClient.kt          # Main public API
-│       │   ├── MqttConfig.kt          # Configuration DSL
-│       │   ├── MqttMessage.kt         # Message & Subscription models
-│       │   ├── MqttException.kt       # Exception hierarchy
-│       │   ├── QoS.kt                 # Quality of Service enum
-│       │   ├── ReasonCode.kt          # MQTT v5 Reason Codes
-│       │   ├── protocol/              # Wire protocol implementation
-│       │   │   ├── MqttCodec.kt       # Encoder/Decoder primitives
-│       │   │   ├── MqttProperties.kt  # v5 Properties encoding/decoding
-│       │   │   ├── MqttPacket.kt      # All 15 packet types
-│       │   │   ├── PacketEncoder.kt   # Packet → bytes
-│       │   │   └── PacketDecoder.kt   # Bytes → packet
-│       │   └── internal/              # Internal implementation
-│       │       ├── MqttConnection.kt  # Ktor TCP/TLS transport
-│       │       ├── PacketIdManager.kt # Packet ID allocation
-│       │       ├── TopicAliasManager.kt
-│       │       └── SessionState.kt    # Session state tracking
-│       └── commonTest/                # Unit tests
-├── sample/                     # Sample console application
-├── gradle/libs.versions.toml  # Version catalog
-└── README.md
+
+Replace `<latest-version>` with the version published on [Maven Central](https://central.sonatype.com/artifact/io.github.baole/kmqtt5).
+
+### Kotlin Multiplatform
+
+For Kotlin Multiplatform projects, add the dependency in the `commonMain` source set:
+
+```kotlin
+kotlin {
+    sourceSets {
+        commonMain.dependencies {
+            implementation("io.github.baole:kmqtt5:<latest-version>")
+        }
+    }
+}
+```
+
+### Version Catalog (libs.versions.toml)
+
+```toml
+[versions]
+kmqtt5 = "<latest-version>"
+
+[libraries]
+kmqtt5 = { module = "io.github.baole:kmqtt5", version.ref = "kmqtt5" }
+```
+
+Then in your `build.gradle.kts`:
+
+```kotlin
+dependencies {
+    implementation(libs.kmqtt5)
+}
 ```
 
 ## Quick Start
@@ -255,6 +277,10 @@ The library implements the full MQTT v5 wire protocol:
 - Handles the QoS 1 and QoS 2 acknowledgment flows automatically
 - Delivers messages via `SharedFlow` and/or callbacks
 
+## Contributing
+
+Contributions are welcome! Please open issues or submit pull requests.
+
 ## License
 
-This project is provided as-is for educational and development purposes.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
