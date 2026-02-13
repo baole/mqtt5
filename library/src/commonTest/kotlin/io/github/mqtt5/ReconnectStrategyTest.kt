@@ -150,6 +150,15 @@ class ReconnectStrategyTest {
         assertFailsWith<IllegalArgumentException> { LinearBackoff(maxAttempts = -1) }
     }
 
+    // ─────────────────── None ───────────────────
+
+    @Test
+    fun noneNeverReconnects() {
+        assertNull(ReconnectStrategy.None.nextDelay(1, null))
+        assertNull(ReconnectStrategy.None.nextDelay(1, MqttConnectionException("lost")))
+        assertNull(ReconnectStrategy.None.nextDelay(100, null))
+    }
+
     // ─────────────────── SAM / Custom Strategy ───────────────────
 
     @Test

@@ -43,6 +43,16 @@ fun interface ReconnectStrategy {
      * @return the [Duration] to wait before attempting, or `null` to stop reconnecting
      */
     fun nextDelay(attempt: Int, cause: Throwable?): Duration?
+
+    companion object {
+        /**
+         * A strategy that never reconnects. Equivalent to `ReconnectStrategy { _, _ -> null }`.
+         *
+         * Useful when you want `autoReconnect = true` for offline-queue buffering
+         * but want to control reconnection timing yourself via [MqttClient.connect].
+         */
+        val None: ReconnectStrategy = ReconnectStrategy { _, _ -> null }
+    }
 }
 
 /**
