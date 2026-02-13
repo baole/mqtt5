@@ -270,7 +270,7 @@ val client = MqttClient {
 ### Request/Response Pattern
 
 ```kotlin
-import io.github.mqtt5.protocol.MqttProperties
+import io.github.mqtt5.MqttProperties
 
 // Requester
 val requestProps = MqttProperties().apply {

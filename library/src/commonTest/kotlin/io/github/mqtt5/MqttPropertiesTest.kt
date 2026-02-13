@@ -1,7 +1,8 @@
 package io.github.mqtt5
 
 import io.github.mqtt5.protocol.MqttDecoder
-import io.github.mqtt5.protocol.MqttProperties
+import io.github.mqtt5.protocol.decodeMqttProperties
+import io.github.mqtt5.protocol.encode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -18,7 +19,7 @@ class MqttPropertiesTest {
         assertEquals(1, encoded.size)
         assertEquals(0, encoded[0].toInt())
 
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
         assertTrue(decoded.isEmpty)
     }
 
@@ -28,7 +29,7 @@ class MqttPropertiesTest {
         props.sessionExpiryInterval = 3600
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(3600L, decoded.sessionExpiryInterval)
     }
@@ -39,7 +40,7 @@ class MqttPropertiesTest {
         props.sessionExpiryInterval = 0xFFFFFFFFL // UINT_MAX = never expire
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(0xFFFFFFFFL, decoded.sessionExpiryInterval)
     }
@@ -50,7 +51,7 @@ class MqttPropertiesTest {
         props.receiveMaximum = 100
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(100, decoded.receiveMaximum)
     }
@@ -61,7 +62,7 @@ class MqttPropertiesTest {
         props.maximumPacketSize = 1048576 // 1MB
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(1048576L, decoded.maximumPacketSize)
     }
@@ -72,7 +73,7 @@ class MqttPropertiesTest {
         props.topicAliasMaximum = 50
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(50, decoded.topicAliasMaximum)
     }
@@ -83,7 +84,7 @@ class MqttPropertiesTest {
         props.topicAlias = 5
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(5, decoded.topicAlias)
     }
@@ -94,7 +95,7 @@ class MqttPropertiesTest {
         props.maximumQos = 1
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(1, decoded.maximumQos)
     }
@@ -105,7 +106,7 @@ class MqttPropertiesTest {
         props.retainAvailable = 0
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(0, decoded.retainAvailable)
     }
@@ -118,7 +119,7 @@ class MqttPropertiesTest {
         props.userProperties.add("key1" to "value3") // Same key allowed
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(3, decoded.userProperties.size)
         assertEquals("key1" to "value1", decoded.userProperties[0])
@@ -132,7 +133,7 @@ class MqttPropertiesTest {
         props.contentType = "application/json"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("application/json", decoded.contentType)
     }
@@ -143,7 +144,7 @@ class MqttPropertiesTest {
         props.responseTopic = "response/client123"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("response/client123", decoded.responseTopic)
     }
@@ -155,7 +156,7 @@ class MqttPropertiesTest {
         props.correlationData = data
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(data.toList(), decoded.correlationData?.toList())
     }
@@ -167,7 +168,7 @@ class MqttPropertiesTest {
         props.subscriptionIdentifiers.add(268435455)
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(2, decoded.subscriptionIdentifiers.size)
         assertEquals(1, decoded.subscriptionIdentifiers[0])
@@ -180,7 +181,7 @@ class MqttPropertiesTest {
         props.authenticationMethod = "SCRAM-SHA-256"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("SCRAM-SHA-256", decoded.authenticationMethod)
     }
@@ -192,7 +193,7 @@ class MqttPropertiesTest {
         props.authenticationData = data
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("auth-data-here", decoded.authenticationData?.decodeToString())
     }
@@ -203,7 +204,7 @@ class MqttPropertiesTest {
         props.reasonString = "Connection rate exceeded"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("Connection rate exceeded", decoded.reasonString)
     }
@@ -214,7 +215,7 @@ class MqttPropertiesTest {
         props.serverReference = "other-server.example.com:8883"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("other-server.example.com:8883", decoded.serverReference)
     }
@@ -228,7 +229,7 @@ class MqttPropertiesTest {
         props.serverKeepAlive = 120
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(1, decoded.wildcardSubscriptionAvailable)
         assertEquals(1, decoded.subscriptionIdentifierAvailable)
@@ -242,7 +243,7 @@ class MqttPropertiesTest {
         props.assignedClientIdentifier = "auto-generated-id-12345"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("auto-generated-id-12345", decoded.assignedClientIdentifier)
     }
@@ -253,7 +254,7 @@ class MqttPropertiesTest {
         props.responseInformation = "response/topic/prefix"
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals("response/topic/prefix", decoded.responseInformation)
     }
@@ -264,7 +265,7 @@ class MqttPropertiesTest {
         props.willDelayInterval = 300
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(300, decoded.willDelayInterval)
     }
@@ -275,7 +276,7 @@ class MqttPropertiesTest {
         props.payloadFormatIndicator = 1
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(1, decoded.payloadFormatIndicator)
     }
@@ -286,7 +287,7 @@ class MqttPropertiesTest {
         props.messageExpiryInterval = 86400
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(86400, decoded.messageExpiryInterval)
     }
@@ -308,7 +309,7 @@ class MqttPropertiesTest {
         props.correlationData = "corr-123".encodeToByteArray()
 
         val encoded = props.encode()
-        val decoded = MqttProperties.decode(MqttDecoder(encoded))
+        val decoded = decodeMqttProperties(MqttDecoder(encoded))
 
         assertEquals(3600L, decoded.sessionExpiryInterval)
         assertEquals(200, decoded.receiveMaximum)

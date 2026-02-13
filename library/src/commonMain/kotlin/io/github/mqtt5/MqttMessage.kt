@@ -1,7 +1,5 @@
 package io.github.mqtt5
 
-import io.github.mqtt5.protocol.MqttProperties
-
 /**
  * Represents an MQTT application message received from a subscription.
  */

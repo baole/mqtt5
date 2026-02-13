@@ -1,5 +1,6 @@
 package io.github.mqtt5.protocol
 
+import io.github.mqtt5.MqttProperties
 import io.github.mqtt5.MqttProtocolException
 import io.github.mqtt5.QoS
 import io.github.mqtt5.ReasonCode
@@ -92,7 +93,7 @@ internal object PacketDecoder {
         // Keep Alive
         val keepAlive = decoder.readTwoByteInteger()
         // Properties
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         // Payload
         val clientId = decoder.readUtf8String()
@@ -102,7 +103,7 @@ internal object PacketDecoder {
         var willPayload: ByteArray? = null
 
         if (hasWill) {
-            willProperties = MqttProperties.decode(decoder)
+            willProperties = decodeMqttProperties(decoder)
             willTopic = decoder.readUtf8String()
             willPayload = decoder.readBinaryData()
         }
@@ -131,7 +132,7 @@ internal object PacketDecoder {
         val acknowledgeFlags = decoder.readByte()
         val sessionPresent = (acknowledgeFlags and 0x01) != 0
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         return ConnackPacket(
             sessionPresent = sessionPresent,
@@ -156,7 +157,7 @@ internal object PacketDecoder {
         val packetId = if (qos.value > 0) decoder.readTwoByteInteger() else null
 
         // Properties
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         // Payload: everything that remains
         val consumed = startRemaining - decoder.remaining
@@ -182,7 +183,7 @@ internal object PacketDecoder {
             return PubackPacket(packetId)
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 4) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 4) decodeMqttProperties(decoder) else MqttProperties()
         return PubackPacket(packetId, reasonCode, properties)
     }
 
@@ -194,7 +195,7 @@ internal object PacketDecoder {
             return PubrecPacket(packetId)
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 4) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 4) decodeMqttProperties(decoder) else MqttProperties()
         return PubrecPacket(packetId, reasonCode, properties)
     }
 
@@ -206,7 +207,7 @@ internal object PacketDecoder {
             return PubrelPacket(packetId)
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 4) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 4) decodeMqttProperties(decoder) else MqttProperties()
         return PubrelPacket(packetId, reasonCode, properties)
     }
 
@@ -218,7 +219,7 @@ internal object PacketDecoder {
             return PubcompPacket(packetId)
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 4) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 4) decodeMqttProperties(decoder) else MqttProperties()
         return PubcompPacket(packetId, reasonCode, properties)
     }
 
@@ -226,7 +227,7 @@ internal object PacketDecoder {
 
     private fun decodeSubscribe(decoder: MqttDecoder): SubscribePacket {
         val packetId = decoder.readTwoByteInteger()
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         val subscriptions = mutableListOf<Pair<String, SubscriptionOptions>>()
         while (!decoder.isExhausted) {
@@ -242,7 +243,7 @@ internal object PacketDecoder {
 
     private fun decodeSuback(decoder: MqttDecoder): SubackPacket {
         val packetId = decoder.readTwoByteInteger()
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         val reasonCodes = mutableListOf<ReasonCode>()
         while (!decoder.isExhausted) {
@@ -256,7 +257,7 @@ internal object PacketDecoder {
 
     private fun decodeUnsubscribe(decoder: MqttDecoder): UnsubscribePacket {
         val packetId = decoder.readTwoByteInteger()
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         val topicFilters = mutableListOf<String>()
         while (!decoder.isExhausted) {
@@ -270,7 +271,7 @@ internal object PacketDecoder {
 
     private fun decodeUnsuback(decoder: MqttDecoder): UnsubackPacket {
         val packetId = decoder.readTwoByteInteger()
-        val properties = MqttProperties.decode(decoder)
+        val properties = decodeMqttProperties(decoder)
 
         val reasonCodes = mutableListOf<ReasonCode>()
         while (!decoder.isExhausted) {
@@ -287,7 +288,7 @@ internal object PacketDecoder {
             return DisconnectPacket()
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 2) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 2) decodeMqttProperties(decoder) else MqttProperties()
         return DisconnectPacket(reasonCode, properties)
     }
 
@@ -298,7 +299,7 @@ internal object PacketDecoder {
             return AuthPacket()
         }
         val reasonCode = ReasonCode.fromValue(decoder.readByte())
-        val properties = if (remainingLength >= 2) MqttProperties.decode(decoder) else MqttProperties()
+        val properties = if (remainingLength >= 2) decodeMqttProperties(decoder) else MqttProperties()
         return AuthPacket(reasonCode, properties)
     }
 }

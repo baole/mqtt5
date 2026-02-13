@@ -1,6 +1,5 @@
 package io.github.mqtt5
 
-import io.github.mqtt5.protocol.MqttProperties
 import io.ktor.network.tls.TLSConfigBuilder
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds

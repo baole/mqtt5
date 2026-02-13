@@ -1,5 +1,4 @@
 import io.github.mqtt5.*
-import io.github.mqtt5.protocol.MqttProperties
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.take
 import kotlin.time.Duration.Companion.seconds

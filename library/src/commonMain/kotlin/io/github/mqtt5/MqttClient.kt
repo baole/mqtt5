@@ -153,10 +153,13 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
 
     private suspend fun sendPublish(topic: String, payload: ByteArray, qos: QoS, retain: Boolean, properties: MqttProperties) {
         logger?.debug(TAG) { "Publishing to '$topic' (qos=${qos.value}, retain=$retain, ${payload.size} bytes)" }
+        // Work on a copy so the caller's properties object is not mutated
+        // (critical for flushOfflineQueue retry — the original must stay clean)
+        val sendProps = properties.copy()
         val aliasResult = topicAliasManagerOutbound.getOutboundAlias(topic)
-        val effectiveTopic = if (aliasResult != null) { properties.topicAlias = aliasResult.second; aliasResult.first } else topic
+        val effectiveTopic = if (aliasResult != null) { sendProps.topicAlias = aliasResult.second; aliasResult.first } else topic
         val packetId = if (qos.value > 0) packetIdManager.allocate() else null
-        val publishPacket = PublishPacket(dup = false, qos = qos, retain = retain, topicName = effectiveTopic, packetId = packetId, properties = properties, payload = payload)
+        val publishPacket = PublishPacket(dup = false, qos = qos, retain = retain, topicName = effectiveTopic, packetId = packetId, properties = sendProps, payload = payload)
         when (qos) {
             QoS.AT_MOST_ONCE -> connection.sendPacket(publishPacket)
             QoS.AT_LEAST_ONCE -> {

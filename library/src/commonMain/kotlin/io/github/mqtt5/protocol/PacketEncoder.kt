@@ -1,5 +1,6 @@
 package io.github.mqtt5.protocol
 
+import io.github.mqtt5.MqttProperties
 import io.github.mqtt5.MqttProtocolException
 
 /**
