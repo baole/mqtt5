@@ -27,6 +27,8 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 ### Reliability & Observability
 
 - **Auto-Reconnect**: automatic reconnection with exponential backoff upon unexpected disconnection; re-subscribes to previously active topics on successful reconnect
+- **Offline Message Queue**: publish while disconnected -- messages are buffered and sent automatically when the connection is restored (configurable capacity, drops oldest when full)
+- **Connection State Flow**: reactive `StateFlow<ConnectionState>` (DISCONNECTED, CONNECTING, CONNECTED, DISCONNECTING, RECONNECTING) for driving UI in Compose / SwiftUI
 - **Connect Timeout**: configurable timeout for the initial TCP/TLS connection handshake
 - **Logging**: optional callback-based logger with configurable log levels (DEBUG, INFO, WARN, ERROR) and lazy message evaluation for zero-cost when disabled
 
@@ -43,6 +45,7 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 
 - **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS/SSL
 - **Coroutine-based**: fully suspending API built on Kotlin coroutines
+- **Reactive State**: `StateFlow<ConnectionState>` for UI binding + `SharedFlow` for messages
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
 - **Zero third-party MQTT dependencies**: the entire protocol is implemented from scratch
 
@@ -133,7 +136,25 @@ fun main() = runBlocking {
 }
 ```
 
-### Auto-Reconnect
+### Connection State (for UI)
+
+```kotlin
+// StateFlow — collect in Compose, SwiftUI, or any coroutine scope
+client.connectionState.collect { state ->
+    when (state) {
+        ConnectionState.CONNECTED -> showOnlineIndicator()
+        ConnectionState.CONNECTING -> showSpinner()
+        ConnectionState.RECONNECTING -> showReconnectingBanner()
+        ConnectionState.DISCONNECTING -> showDisconnecting()
+        ConnectionState.DISCONNECTED -> showOfflineIndicator()
+    }
+}
+
+// Or read the current value synchronously
+if (client.connectionState.value == ConnectionState.CONNECTED) { /* ... */ }
+```
+
+### Auto-Reconnect with Offline Queue
 
 ```kotlin
 val client = MqttClient {
@@ -145,14 +166,21 @@ val client = MqttClient {
     reconnectDelay = 1.seconds         // initial delay
     maxReconnectDelay = 60.seconds     // cap for exponential backoff
     maxReconnectAttempts = 0           // 0 = unlimited
+
+    // Messages published while disconnected are queued and sent on reconnect
+    offlineQueueCapacity = 100         // 0 = unlimited
 }
+
+// Publish even while disconnected — it will be queued and sent later
+client.publish("sensor/temp", "22.5", QoS.AT_LEAST_ONCE)
+println("Queued messages: ${client.offlineQueueSize}")
 
 // Optional: monitor reconnection events
 client.onReconnecting = { attempt ->
     println("Reconnecting... attempt $attempt")
 }
 client.onReconnected = {
-    println("Reconnected! Subscriptions restored automatically.")
+    println("Reconnected! Subscriptions and queued messages restored.")
 }
 ```
 

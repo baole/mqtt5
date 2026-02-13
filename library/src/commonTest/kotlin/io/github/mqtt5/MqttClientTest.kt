@@ -23,6 +23,7 @@ class MqttClientTest {
         assertEquals(0, client.config.maxReconnectAttempts)
         assertEquals(30.seconds, client.config.connectTimeout)
         assertNull(client.config.logger)
+        assertEquals(100, client.config.offlineQueueCapacity)
         assertNull(client.config.will)
         assertNull(client.config.username)
         assertNull(client.config.password)
@@ -64,6 +65,8 @@ class MqttClientTest {
         val client = MqttClient()
         assertFalse(client.isConnected)
         assertFalse(client.isReconnecting)
+        assertEquals(ConnectionState.DISCONNECTED, client.connectionState.value)
+        assertEquals(0, client.offlineQueueSize)
     }
 
     // ─────────────────── Credentials Helper ───────────────────

@@ -83,6 +83,13 @@ class MqttConfig {
     /** Maximum number of reconnection attempts. 0 means unlimited. */
     var maxReconnectAttempts: Int = 0
 
+    /**
+     * Maximum number of messages to buffer when disconnected and [autoReconnect] is enabled.
+     * When the queue is full, the oldest message is dropped to make room.
+     * Set to 0 for unlimited queue size.
+     */
+    var offlineQueueCapacity: Int = 100
+
     /** Optional logger for debugging and monitoring. */
     var logger: MqttLogger? = null
 
