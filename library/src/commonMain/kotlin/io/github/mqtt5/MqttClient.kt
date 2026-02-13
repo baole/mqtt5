@@ -204,15 +204,16 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     }
 
     private suspend fun enqueueOffline(topic: String, payload: ByteArray, qos: QoS, retain: Boolean, properties: MqttProperties) {
-        offlineQueueMutex.withLock {
+        val size = offlineQueueMutex.withLock {
             val cap = config.offlineQueueCapacity
             if (cap > 0 && offlineQueue.size >= cap) {
                 val dropped = offlineQueue.removeFirst()
                 logger?.warn(TAG) { "Offline queue full ($cap), dropped oldest message for '${dropped.topic}'" }
             }
             offlineQueue.addLast(PendingOfflinePublish(topic, payload, qos, retain, properties.copy()))
+            offlineQueue.size
         }
-        logger?.debug(TAG) { "Queued offline message for '$topic' (queue size: ${offlineQueue.size})" }
+        logger?.debug(TAG) { "Queued offline message for '$topic' (queue size: $size)" }
     }
 
     private suspend fun flushOfflineQueue() {
