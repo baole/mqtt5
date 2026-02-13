@@ -44,6 +44,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     @kotlin.concurrent.Volatile var isConnected: Boolean = false; private set
     @kotlin.concurrent.Volatile var isReconnecting: Boolean = false; private set
     @kotlin.concurrent.Volatile private var userDisconnected: Boolean = false
+    private val reconnectGuard = kotlinx.coroutines.sync.Mutex()
 
     val clientId: String get() = sessionState.assignedClientId ?: config.clientId
 
@@ -426,7 +427,10 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     }
 
     private suspend fun attemptReconnect(connectionLostCause: Throwable?) {
-        if (isReconnecting) return; isReconnecting = true
+        // Atomically guard against concurrent reconnection attempts
+        val acquired = reconnectGuard.tryLock()
+        if (!acquired) return
+        isReconnecting = true
         val strategy = config.effectiveReconnectStrategy()
         var attempt = 0
         logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts (strategy: ${strategy::class.simpleName})" }
@@ -452,7 +456,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                 catch (e: Exception) { logger?.warn(TAG) { "Reconnection attempt $attempt failed: ${e.message}" }; _connectionState.value = ConnectionState.RECONNECTING }
                 delay(waitDuration)
             }
-        } finally { isReconnecting = false }
+        } finally { isReconnecting = false; reconnectGuard.unlock() }
     }
 
     suspend fun reauthenticate(authData: ByteArray? = null) {
