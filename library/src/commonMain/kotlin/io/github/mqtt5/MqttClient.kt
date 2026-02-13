@@ -120,7 +120,10 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     is ConnackPacket -> { handleConnack(next); return }
                     else -> throw MqttProtocolException("Unexpected packet during auth: ${next.type}")
                 }
-            } else break
+            } else {
+                connection.close()
+                throw MqttProtocolException("Enhanced auth handler returned null — authentication incomplete")
+            }
         }
     }
 
@@ -300,7 +303,11 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         val packetId = packetIdManager.allocate()
         val deferred = CompletableDeferred<UnsubackPacket>(); sessionState.pendingUnsuback[packetId] = deferred
         connection.sendPacket(UnsubscribePacket(packetId = packetId, topicFilters = topicFilters))
-        try { val unsuback = deferred.await(); for (f in topicFilters) sessionState.subscriptions.remove(f); return unsuback.reasonCodes }
+        try {
+            val unsuback = deferred.await()
+            for ((i, f) in topicFilters.withIndex()) { val rc = unsuback.reasonCodes.getOrNull(i); if (rc != null && !rc.isError) sessionState.subscriptions.remove(f) }
+            return unsuback.reasonCodes
+        }
         finally { sessionState.pendingUnsuback.remove(packetId); packetIdManager.release(packetId) }
     }
 
