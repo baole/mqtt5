@@ -6,7 +6,7 @@ plugins {
 // Maven coordinates
 val mavenGroup = "io.github.baole"
 val mavenArtifactId = "kmqtt5"
-val mavenVersion = "1.0.0"
+val mavenVersion = "1.1.0"
 
 kotlin {
     jvm()
