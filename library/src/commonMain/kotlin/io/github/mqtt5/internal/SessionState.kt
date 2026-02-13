@@ -93,7 +93,7 @@ internal class SessionState {
      * Save in-flight QoS 1/2 messages for retry on reconnect.
      * Must be called before completing pending deferreds and before clearForReconnect().
      */
-    fun saveInflightForRetry() {
+    suspend fun saveInflightForRetry() = mutex.withLock {
         val messages = mutableListOf<InflightMessage>()
         for ((id, pending) in pendingPuback) {
             messages.add(InflightMessage(id, pending.packet))
@@ -104,7 +104,19 @@ internal class SessionState {
         inflightForRetry = messages
     }
 
-    fun clearInflightRetry() {
+    suspend fun clearInflightRetry() = mutex.withLock {
+        inflightForRetry = emptyList()
+    }
+
+    /**
+     * Fail all pending QoS 1/2 deferreds exceptionally and clear the maps.
+     * Must be called under the mutex to avoid races with the read loop.
+     */
+    suspend fun failAndClearPending(error: Exception) = mutex.withLock {
+        pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
+        pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
+        pendingPuback.clear()
+        pendingQos2Outbound.clear()
         inflightForRetry = emptyList()
     }
 
@@ -127,7 +139,7 @@ internal class SessionState {
      * Clear transient state for a new connection while keeping subscriptions
      * if session is being resumed.
      */
-    fun clearForReconnect(cleanStart: Boolean) {
+    suspend fun clearForReconnect(cleanStart: Boolean) = mutex.withLock {
         pendingPuback.clear()
         pendingQos2Outbound.clear()
         pendingQos2Inbound.clear()

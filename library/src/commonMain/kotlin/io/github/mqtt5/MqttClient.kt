@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 
 class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     val config = MqttConfig().apply(configure)
@@ -26,7 +27,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     private val offlineQueue = ArrayDeque<PendingOfflinePublish>()
-    val offlineQueueSize: Int get() = offlineQueue.size
+    private val offlineQueueMutex = kotlinx.coroutines.sync.Mutex()
+    val offlineQueueSize: Int get() = offlineQueue.size // snapshot; may race but is informational only
 
     private var clientScope: CoroutineScope? = null
     private var readJob: Job? = null
@@ -166,35 +168,59 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         when (qos) {
             QoS.AT_MOST_ONCE -> connection.sendPacket(publishPacket)
             QoS.AT_LEAST_ONCE -> {
-                val pending = PendingPublish(publishPacket); sessionState.addPendingPuback(packetId!!, pending)
-                connection.sendPacket(publishPacket); sessionState.sendQuota--
+                val pending = PendingPublish(publishPacket)
+                sessionState.addPendingPuback(packetId!!, pending)
+                try {
+                    connection.sendPacket(publishPacket)
+                } catch (e: Exception) {
+                    sessionState.completePuback(packetId)
+                    packetIdManager.release(packetId)
+                    throw e
+                }
+                sessionState.sendQuota--
                 try { pending.deferred.await() } finally { sessionState.sendQuota++; packetIdManager.release(packetId) }
             }
             QoS.EXACTLY_ONCE -> {
-                val state = Qos2OutboundState(publishPacket); sessionState.addPendingQos2Outbound(packetId!!, state)
-                connection.sendPacket(publishPacket); sessionState.sendQuota--
+                val state = Qos2OutboundState(publishPacket)
+                sessionState.addPendingQos2Outbound(packetId!!, state)
+                try {
+                    connection.sendPacket(publishPacket)
+                } catch (e: Exception) {
+                    sessionState.removePendingQos2Outbound(packetId)
+                    packetIdManager.release(packetId)
+                    throw e
+                }
+                sessionState.sendQuota--
                 try { state.deferred.await() } finally { sessionState.sendQuota++; packetIdManager.release(packetId) }
             }
         }
     }
 
-    private fun enqueueOffline(topic: String, payload: ByteArray, qos: QoS, retain: Boolean, properties: MqttProperties) {
-        val cap = config.offlineQueueCapacity
-        if (cap > 0 && offlineQueue.size >= cap) {
-            val dropped = offlineQueue.removeFirst()
-            logger?.warn(TAG) { "Offline queue full ($cap), dropped oldest message for '${dropped.topic}'" }
+    private suspend fun enqueueOffline(topic: String, payload: ByteArray, qos: QoS, retain: Boolean, properties: MqttProperties) {
+        offlineQueueMutex.withLock {
+            val cap = config.offlineQueueCapacity
+            if (cap > 0 && offlineQueue.size >= cap) {
+                val dropped = offlineQueue.removeFirst()
+                logger?.warn(TAG) { "Offline queue full ($cap), dropped oldest message for '${dropped.topic}'" }
+            }
+            offlineQueue.addLast(PendingOfflinePublish(topic, payload, qos, retain, properties))
         }
-        offlineQueue.addLast(PendingOfflinePublish(topic, payload, qos, retain, properties))
         logger?.debug(TAG) { "Queued offline message for '$topic' (queue size: ${offlineQueue.size})" }
     }
 
     private suspend fun flushOfflineQueue() {
-        if (offlineQueue.isEmpty()) return
-        logger?.info(TAG) { "Flushing ${offlineQueue.size} queued offline message(s)" }
-        while (offlineQueue.isNotEmpty()) {
-            val msg = offlineQueue.removeFirst()
-            try { sendPublish(msg.topic, msg.payload, msg.qos, msg.retain, msg.properties) }
-            catch (e: Exception) { logger?.warn(TAG) { "Failed to flush '${msg.topic}': ${e.message}" }; offlineQueue.addFirst(msg); break }
+        while (true) {
+            val msg = offlineQueueMutex.withLock {
+                if (offlineQueue.isEmpty()) return
+                offlineQueue.removeFirst()
+            }
+            try {
+                sendPublish(msg.topic, msg.payload, msg.qos, msg.retain, msg.properties)
+            } catch (e: Exception) {
+                logger?.warn(TAG) { "Failed to flush '${msg.topic}': ${e.message}" }
+                offlineQueueMutex.withLock { offlineQueue.addFirst(msg) }
+                break
+            }
         }
     }
 
@@ -275,12 +301,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     /**
      * Fail all pending QoS 1/2 operations and clean up.
      */
-    private fun failPendingQosMessages(error: Exception) {
-        sessionState.pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
-        sessionState.pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
-        sessionState.pendingPuback.clear()
-        sessionState.pendingQos2Outbound.clear()
-        sessionState.clearInflightRetry()
+    private suspend fun failPendingQosMessages(error: Exception) {
+        sessionState.failAndClearPending(error)
     }
 
     suspend fun subscribe(subscriptions: List<Subscription>): List<ReasonCode> {
@@ -363,7 +385,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         onDisconnect?.invoke(MqttException("Server disconnected: ${packet.reasonCode.name} - ${packet.properties.reasonString ?: ""}"))
     }
 
-    private fun handleConnectionLost(cause: Throwable?) {
+    private suspend fun handleConnectionLost(cause: Throwable?) {
         if (!isConnected) return; isConnected = false
         logger?.warn(TAG) { "Connection lost${cause?.let { ": ${it.message}" } ?: ""}" }
         onDisconnect?.invoke(cause)
@@ -373,12 +395,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             sessionState.saveInflightForRetry()
         }
 
-        // Fail all pending operations
-        val error = MqttConnectionException("Connection lost", cause)
-        sessionState.pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
-        sessionState.pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
-        sessionState.pendingSuback.values.forEach { it.completeExceptionally(error) }
-        sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(error) }
+        // Fail all pending operations under the mutex
+        failPendingQosMessages(MqttConnectionException("Connection lost", cause))
+        // Suback/unsuback deferreds are only accessed from the read loop (single coroutine),
+        // but clear them too for completeness.
+        sessionState.pendingSuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
+        sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(MqttConnectionException("Connection lost", cause)) }
 
         if (config.autoReconnect && !userDisconnected) { _connectionState.value = ConnectionState.RECONNECTING; clientScope?.launch { attemptReconnect() } }
         else _connectionState.value = ConnectionState.DISCONNECTED
