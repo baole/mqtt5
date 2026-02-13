@@ -47,6 +47,18 @@ internal class PacketIdManager {
     }
 
     /**
+     * Reserve a specific Packet Identifier (e.g., for QoS retry on reconnect).
+     * Per MQTT v5 Section 4.4, retried messages must use their original Packet Identifiers.
+     *
+     * @return true if the ID was successfully reserved, false if it's already in use.
+     */
+    suspend fun reserve(id: Int): Boolean = mutex.withLock {
+        if (id in inUse) return@withLock false
+        inUse.add(id)
+        true
+    }
+
+    /**
      * Reset all packet identifiers (e.g., on reconnect).
      */
     suspend fun reset() = mutex.withLock {

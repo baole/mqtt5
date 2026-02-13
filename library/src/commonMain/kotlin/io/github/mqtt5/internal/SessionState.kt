@@ -50,6 +50,13 @@ internal class SessionState {
     /** Current send quota for flow control. */
     var sendQuota: Int = 65535
 
+    /** Whether the server indicated a session was present in the latest CONNACK. */
+    var sessionPresent: Boolean = false
+
+    /** In-flight QoS 1/2 messages saved for retry on reconnect (MQTT v5 Section 4.4). */
+    var inflightForRetry: List<InflightMessage> = emptyList()
+        private set
+
     suspend fun addPendingPuback(packetId: Int, publish: PendingPublish) = mutex.withLock {
         pendingPuback[packetId] = publish
     }
@@ -82,7 +89,27 @@ internal class SessionState {
         packetId in pendingQos2Inbound
     }
 
+    /**
+     * Save in-flight QoS 1/2 messages for retry on reconnect.
+     * Must be called before completing pending deferreds and before clearForReconnect().
+     */
+    fun saveInflightForRetry() {
+        val messages = mutableListOf<InflightMessage>()
+        for ((id, pending) in pendingPuback) {
+            messages.add(InflightMessage(id, pending.packet))
+        }
+        for ((id, state) in pendingQos2Outbound) {
+            messages.add(InflightMessage(id, state.packet, state.pubrecReceived))
+        }
+        inflightForRetry = messages
+    }
+
+    fun clearInflightRetry() {
+        inflightForRetry = emptyList()
+    }
+
     fun updateFromConnack(connack: ConnackPacket) {
+        sessionPresent = connack.sessionPresent
         val props = connack.properties
         props.maximumQos?.let { serverMaxQos = it }
         props.retainAvailable?.let { serverRetainAvailable = it == 1 }
@@ -128,4 +155,14 @@ internal data class Qos2OutboundState(
     val packet: PublishPacket,
     val deferred: CompletableDeferred<Unit> = CompletableDeferred(),
     var pubrecReceived: Boolean = false,
+)
+
+/**
+ * Represents an in-flight QoS 1/2 message saved for retry on reconnect.
+ * Per MQTT v5 Section 4.4, these must be resent with the DUP flag when a session is resumed.
+ */
+internal data class InflightMessage(
+    val packetId: Int,
+    val packet: PublishPacket,
+    val pubrecReceived: Boolean = false,
 )

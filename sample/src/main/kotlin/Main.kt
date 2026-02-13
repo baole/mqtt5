@@ -40,6 +40,12 @@ fun main() = runBlocking {
         // Optional: set credentials
         // credentials("username", "password")
 
+        // Optional: TLS with custom configuration
+        // tls {
+        //     // JVM: set custom trust manager for custom CA certs
+        //     // trustManager = myCustomTrustManager
+        // }
+
         // Optional: configure a Will Message
         will("status/kmqtt5-sample", "offline".encodeToByteArray(), QoS.AT_LEAST_ONCE) {
             delayInterval = 5

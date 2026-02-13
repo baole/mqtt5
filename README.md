@@ -22,11 +22,12 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 - **Re-Authentication**: initiate re-authentication on an active connection
 - **Reason Codes**: comprehensive reason code support on all acknowledgment packets
 - **Server Capability Discovery**: Maximum QoS, Retain Available, Wildcard/Shared/Subscription-ID availability
-- **Plain TCP & TLS/SSL**: supports both unencrypted (port 1883) and secure (port 8883) connections using the system trust store
+- **Plain TCP & TLS/SSL**: supports both unencrypted (port 1883) and secure (port 8883) connections with custom TLS configuration (custom CA, mTLS)
 
 ### Reliability & Observability
 
 - **Auto-Reconnect**: automatic reconnection with exponential backoff upon unexpected disconnection; re-subscribes to previously active topics on successful reconnect
+- **QoS 1/2 Retry on Reconnect**: per MQTT v5 Section 4.4, unacknowledged QoS 1/2 messages are automatically resent with the DUP flag when the session is resumed after reconnect
 - **Offline Message Queue**: publish while disconnected -- messages are buffered and sent automatically when the connection is restored (configurable capacity, drops oldest when full)
 - **Connection State Flow**: reactive `StateFlow<ConnectionState>` (DISCONNECTED, CONNECTING, CONNECTED, DISCONNECTING, RECONNECTING) for driving UI in Compose / SwiftUI
 - **Connect Timeout**: configurable timeout for the initial TCP/TLS connection handshake
@@ -43,9 +44,10 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 
 ### Library Design
 
-- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS/SSL
+- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS/SSL with custom configuration support
 - **Coroutine-based**: fully suspending API built on Kotlin coroutines
 - **Reactive State**: `StateFlow<ConnectionState>` for UI binding + `SharedFlow` for messages
+- **Spec-compliant Session Resumption**: QoS 1/2 message retry with DUP flag per MQTT v5 Section 4.4
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
 - **Zero third-party MQTT dependencies**: the entire protocol is implemented from scratch
 
@@ -213,6 +215,40 @@ val client = MqttClient {
     useTls = true
     clientId = "secure-client"
     credentials("username", "password")
+}
+```
+
+### Custom TLS Configuration
+
+The `tls {}` helper enables TLS and gives access to Ktor's `TLSConfigBuilder` for
+platform-specific settings such as custom trust managers and client certificates.
+
+```kotlin
+// Basic TLS (system trust store)
+val client = MqttClient {
+    host = "broker.example.com"
+    port = 8883
+    tls()  // enables TLS with default (system) trust store
+}
+
+// Custom CA certificate (JVM) — e.g., for AWS IoT Core, Azure IoT Hub
+val client = MqttClient {
+    host = "iot.example.com"
+    port = 8883
+    tls {
+        trustManager = myCustomTrustManager  // JVM: javax.net.ssl.TrustManager
+    }
+}
+
+// Mutual TLS (mTLS) with client certificates (JVM)
+val client = MqttClient {
+    host = "iot.example.com"
+    port = 8883
+    tls {
+        trustManager = myCustomTrustManager
+        // Add client certificate for mutual authentication
+        addKeyStore(keyStore, keyPassword)
+    }
 }
 ```
 

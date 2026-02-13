@@ -54,12 +54,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         try {
             if (config.connectTimeout.isPositive()) {
                 try {
-                    withTimeout(config.connectTimeout) { connection.connect(config.host, config.port, config.useTls) }
+                    withTimeout(config.connectTimeout) { connection.connect(config.host, config.port, config.useTls, config.tlsConfig) }
                 } catch (e: TimeoutCancellationException) {
                     throw MqttConnectionException("Connection timed out after ${config.connectTimeout}", e)
                 }
             } else {
-                connection.connect(config.host, config.port, config.useTls)
+                connection.connect(config.host, config.port, config.useTls, config.tlsConfig)
             }
             val connectProps = MqttProperties().apply {
                 if (config.sessionExpiryInterval > 0) sessionExpiryInterval = config.sessionExpiryInterval
@@ -92,6 +92,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             logger?.info(TAG) { "Connected to ${config.host}:${config.port}" }
             readJob = scope.launch { readLoop() }
             startKeepAlive()
+            retryInflightMessages()
             flushOfflineQueue()
         } catch (e: Exception) {
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -128,6 +129,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         userDisconnected = true; isConnected = false
         _connectionState.value = ConnectionState.DISCONNECTING
         keepAliveJob?.cancel(); readJob?.cancel()
+        failPendingQosMessages(MqttConnectionException("Client disconnected"))
         logger?.info(TAG) { "Disconnecting (reason=${reasonCode.name})" }
         try {
             val props = MqttProperties(); sessionExpiryInterval?.let { props.sessionExpiryInterval = it }
@@ -188,6 +190,91 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             try { sendPublish(msg.topic, msg.payload, msg.qos, msg.retain, msg.properties) }
             catch (e: Exception) { logger?.warn(TAG) { "Failed to flush '${msg.topic}': ${e.message}" }; offlineQueue.addFirst(msg); break }
         }
+    }
+
+    /**
+     * Retry in-flight QoS 1/2 messages after reconnection (MQTT v5 Section 4.4).
+     *
+     * When a client reconnects with cleanStart=false and the server indicates
+     * session present, unacknowledged PUBLISH packets are resent with the DUP flag
+     * and PUBREL packets are resent for QoS 2 flows that already received PUBREC.
+     */
+    private suspend fun retryInflightMessages() {
+        val messages = sessionState.inflightForRetry
+        if (messages.isEmpty()) return
+
+        if (!sessionState.sessionPresent) {
+            logger?.info(TAG) { "Session not preserved, skipping ${messages.size} in-flight message retry" }
+            sessionState.clearInflightRetry()
+            return
+        }
+
+        logger?.info(TAG) { "Retrying ${messages.size} in-flight QoS message(s) with DUP flag" }
+
+        for (msg in messages) {
+            // Re-reserve the original packet ID (released by the previous publish's finally block)
+            if (!packetIdManager.reserve(msg.packetId)) {
+                logger?.warn(TAG) { "Cannot retry packet ${msg.packetId}: ID already in use" }
+                continue
+            }
+
+            try {
+                if (msg.pubrecReceived) {
+                    // QoS 2: already received PUBREC, resend PUBREL
+                    val state = Qos2OutboundState(msg.packet)
+                    state.pubrecReceived = true
+                    sessionState.addPendingQos2Outbound(msg.packetId, state)
+                    connection.sendPacket(PubrelPacket(msg.packetId))
+                    sessionState.sendQuota--
+                    logger?.debug(TAG) { "Resent PUBREL for packet ${msg.packetId}" }
+                    // Launch background coroutine to clean up when ack arrives
+                    clientScope?.launch {
+                        try { state.deferred.await() } catch (_: Exception) {}
+                        finally { sessionState.sendQuota++; packetIdManager.release(msg.packetId) }
+                    }
+                } else if (msg.packet.qos == QoS.EXACTLY_ONCE) {
+                    // QoS 2: resend PUBLISH with DUP=1
+                    val dupPacket = msg.packet.copy(dup = true)
+                    val state = Qos2OutboundState(dupPacket)
+                    sessionState.addPendingQos2Outbound(msg.packetId, state)
+                    connection.sendPacket(dupPacket)
+                    sessionState.sendQuota--
+                    logger?.debug(TAG) { "Resent PUBLISH (DUP) QoS 2 for packet ${msg.packetId}" }
+                    clientScope?.launch {
+                        try { state.deferred.await() } catch (_: Exception) {}
+                        finally { sessionState.sendQuota++; packetIdManager.release(msg.packetId) }
+                    }
+                } else {
+                    // QoS 1: resend PUBLISH with DUP=1
+                    val dupPacket = msg.packet.copy(dup = true)
+                    val pending = PendingPublish(dupPacket)
+                    sessionState.addPendingPuback(msg.packetId, pending)
+                    connection.sendPacket(dupPacket)
+                    sessionState.sendQuota--
+                    logger?.debug(TAG) { "Resent PUBLISH (DUP) QoS 1 for packet ${msg.packetId}" }
+                    clientScope?.launch {
+                        try { pending.deferred.await() } catch (_: Exception) {}
+                        finally { sessionState.sendQuota++; packetIdManager.release(msg.packetId) }
+                    }
+                }
+            } catch (e: Exception) {
+                logger?.warn(TAG) { "Failed to retry packet ${msg.packetId}: ${e.message}" }
+                packetIdManager.release(msg.packetId)
+            }
+        }
+
+        sessionState.clearInflightRetry()
+    }
+
+    /**
+     * Fail all pending QoS 1/2 operations and clean up.
+     */
+    private fun failPendingQosMessages(error: Exception) {
+        sessionState.pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
+        sessionState.pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
+        sessionState.pendingPuback.clear()
+        sessionState.pendingQos2Outbound.clear()
+        sessionState.clearInflightRetry()
     }
 
     suspend fun subscribe(subscriptions: List<Subscription>): List<ReasonCode> {
@@ -260,7 +347,9 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
 
     private suspend fun handleServerDisconnect(packet: DisconnectPacket) {
         logger?.warn(TAG) { "Server sent DISCONNECT: ${packet.reasonCode.name}" }
-        isConnected = false; _connectionState.value = ConnectionState.DISCONNECTED; connection.close()
+        isConnected = false
+        failPendingQosMessages(MqttConnectionException("Server disconnected: ${packet.reasonCode.name}"))
+        _connectionState.value = ConnectionState.DISCONNECTED; connection.close()
         onDisconnect?.invoke(MqttException("Server disconnected: ${packet.reasonCode.name} - ${packet.properties.reasonString ?: ""}"))
     }
 
@@ -268,11 +357,19 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         if (!isConnected) return; isConnected = false
         logger?.warn(TAG) { "Connection lost${cause?.let { ": ${it.message}" } ?: ""}" }
         onDisconnect?.invoke(cause)
+
+        // Save in-flight QoS 1/2 messages for potential retry on reconnect (MQTT v5 Section 4.4)
+        if (config.autoReconnect && !userDisconnected) {
+            sessionState.saveInflightForRetry()
+        }
+
+        // Fail all pending operations
         val error = MqttConnectionException("Connection lost", cause)
         sessionState.pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
         sessionState.pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
         sessionState.pendingSuback.values.forEach { it.completeExceptionally(error) }
         sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(error) }
+
         if (config.autoReconnect && !userDisconnected) { _connectionState.value = ConnectionState.RECONNECTING; clientScope?.launch { attemptReconnect() } }
         else _connectionState.value = ConnectionState.DISCONNECTED
     }
@@ -284,7 +381,11 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         try {
             while (true) {
                 attempt++
-                if (maxAttempts > 0 && attempt > maxAttempts) { logger?.error(TAG) { "Max reconnect attempts ($maxAttempts) reached" }; _connectionState.value = ConnectionState.DISCONNECTED; break }
+                if (maxAttempts > 0 && attempt > maxAttempts) {
+                    logger?.error(TAG) { "Max reconnect attempts ($maxAttempts) reached" }
+                    failPendingQosMessages(MqttConnectionException("Max reconnect attempts reached"))
+                    _connectionState.value = ConnectionState.DISCONNECTED; break
+                }
                 logger?.info(TAG) { "Reconnection attempt $attempt${if (maxAttempts > 0) "/$maxAttempts" else ""}" }
                 onReconnecting?.invoke(attempt)
                 try {

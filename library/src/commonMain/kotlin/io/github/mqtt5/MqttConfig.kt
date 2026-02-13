@@ -1,6 +1,7 @@
 package io.github.mqtt5
 
 import io.github.mqtt5.protocol.MqttProperties
+import io.ktor.network.tls.TLSConfigBuilder
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -62,6 +63,40 @@ class MqttConfig {
 
     /** Whether to use TLS. */
     var useTls: Boolean = false
+
+    /**
+     * Custom TLS configuration block applied to Ktor's [TLSConfigBuilder].
+     * Use the [tls] helper to set this and enable TLS automatically.
+     *
+     * On JVM, the builder gives access to `trustManager` (for custom CA certificates)
+     * and client certificate configuration for mutual TLS (mTLS).
+     */
+    var tlsConfig: (TLSConfigBuilder.() -> Unit)? = null
+
+    /**
+     * Enable TLS with optional custom configuration.
+     *
+     * The [block] is applied to Ktor's [TLSConfigBuilder], giving access to
+     * platform-specific TLS settings. On JVM this includes custom trust managers
+     * and client certificates for mutual TLS (mTLS), commonly required for
+     * AWS IoT Core, Azure IoT Hub, and similar cloud IoT platforms.
+     *
+     * Calling this automatically sets [useTls] to `true`.
+     *
+     * ```kotlin
+     * // Basic TLS (system trust store)
+     * tls()
+     *
+     * // Custom CA / mTLS (JVM)
+     * tls {
+     *     trustManager = myCustomTrustManager
+     * }
+     * ```
+     */
+    fun tls(block: TLSConfigBuilder.() -> Unit = {}) {
+        useTls = true
+        tlsConfig = block
+    }
 
     // --- Will Message Configuration ---
 
