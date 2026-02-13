@@ -22,11 +22,26 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 - **Re-Authentication**: initiate re-authentication on an active connection
 - **Reason Codes**: comprehensive reason code support on all acknowledgment packets
 - **Server Capability Discovery**: Maximum QoS, Retain Available, Wildcard/Shared/Subscription-ID availability
+- **Plain TCP & TLS/SSL**: supports both unencrypted (port 1883) and secure (port 8883) connections using the system trust store
+
+### Reliability & Observability
+
+- **Auto-Reconnect**: automatic reconnection with exponential backoff upon unexpected disconnection; re-subscribes to previously active topics on successful reconnect
+- **Connect Timeout**: configurable timeout for the initial TCP/TLS connection handshake
+- **Logging**: optional callback-based logger with configurable log levels (DEBUG, INFO, WARN, ERROR) and lazy message evaluation for zero-cost when disabled
+
+### Supported Platforms
+
+| Platform | Targets |
+|----------|---------|
+| **JVM** | JVM 17+, Android |
+| **iOS** | iosArm64, iosX64, iosSimulatorArm64 |
+| **macOS** | macosArm64 (Apple Silicon), macosX64 (Intel) |
+| **Linux** | linuxX64 |
 
 ### Library Design
 
-- **Kotlin Multiplatform**: targets JVM/Android, iOS (arm64/x64/simulator), macOS (arm64/x64), Linux (x64)
-- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS
+- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS/SSL
 - **Coroutine-based**: fully suspending API built on Kotlin coroutines
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
 - **Zero third-party MQTT dependencies**: the entire protocol is implemented from scratch
@@ -115,6 +130,49 @@ fun main() = runBlocking {
 
     // Disconnect
     client.disconnect()
+}
+```
+
+### Auto-Reconnect
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    clientId = "reliable-client"
+
+    // Enable auto-reconnect with exponential backoff
+    autoReconnect = true
+    reconnectDelay = 1.seconds         // initial delay
+    maxReconnectDelay = 60.seconds     // cap for exponential backoff
+    maxReconnectAttempts = 0           // 0 = unlimited
+}
+
+// Optional: monitor reconnection events
+client.onReconnecting = { attempt ->
+    println("Reconnecting... attempt $attempt")
+}
+client.onReconnected = {
+    println("Reconnected! Subscriptions restored automatically.")
+}
+```
+
+### Connect Timeout
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    connectTimeout = 10.seconds  // fail fast if broker is unreachable
+}
+```
+
+### Logging
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    logger = MqttLogger(minLevel = MqttLogLevel.DEBUG) { level, tag, message ->
+        println("[$level] $tag: $message")
+    }
 }
 ```
 

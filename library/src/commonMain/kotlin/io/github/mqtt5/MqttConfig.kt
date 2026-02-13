@@ -74,11 +74,17 @@ class MqttConfig {
     /** Whether to automatically reconnect on connection loss. */
     var autoReconnect: Boolean = false
 
-    /** Delay between reconnection attempts. */
-    var reconnectDelay: Duration = 5.seconds
+    /** Initial delay between reconnection attempts. Increases with exponential backoff. */
+    var reconnectDelay: Duration = 1.seconds
+
+    /** Maximum delay between reconnection attempts (caps exponential backoff). */
+    var maxReconnectDelay: Duration = 60.seconds
 
     /** Maximum number of reconnection attempts. 0 means unlimited. */
     var maxReconnectAttempts: Int = 0
+
+    /** Optional logger for debugging and monitoring. */
+    var logger: MqttLogger? = null
 
     /** Helper to set username/password. */
     fun credentials(username: String, password: String? = null) {

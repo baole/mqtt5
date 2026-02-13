@@ -6,6 +6,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * MQTT v5.0 Client.
@@ -50,6 +51,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     private var readJob: Job? = null
     private var keepAliveJob: Job? = null
 
+    private val logger get() = config.logger
+
     /**
      * Callback-based message listener as an alternative to the Flow API.
      * Set this before calling [connect] if you prefer callbacks.
@@ -59,6 +62,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     /** Called when the connection is lost unexpectedly. */
     var onDisconnect: ((Throwable?) -> Unit)? = null
 
+    /** Called when a reconnection attempt starts. The parameter is the attempt number. */
+    var onReconnecting: ((attempt: Int) -> Unit)? = null
+
+    /** Called when a reconnection succeeds. */
+    var onReconnected: (() -> Unit)? = null
+
     /** Called when an AUTH packet is received (for enhanced authentication). */
     var onAuth: (suspend (AuthPacket) -> AuthPacket?)? = null
 
@@ -66,6 +75,15 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     @kotlin.concurrent.Volatile
     var isConnected: Boolean = false
         private set
+
+    /** Whether a reconnection is currently in progress. */
+    @kotlin.concurrent.Volatile
+    var isReconnecting: Boolean = false
+        private set
+
+    /** Set to true by user-initiated disconnect to suppress auto-reconnect. */
+    @kotlin.concurrent.Volatile
+    private var userDisconnected: Boolean = false
 
     /** The actual client ID (may be server-assigned). */
     val clientId: String
@@ -80,11 +98,27 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
      * @throws MqttConnectionException if the network connection fails.
      */
     suspend fun connect() {
+        userDisconnected = false
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         clientScope = scope
 
-        // Open TCP/TLS connection
-        connection.connect(config.host, config.port, config.useTls)
+        logger?.info(TAG) { "Connecting to ${config.host}:${config.port} (tls=${config.useTls})" }
+
+        // Open TCP/TLS connection with connect timeout
+        if (config.connectTimeout.isPositive()) {
+            try {
+                withTimeout(config.connectTimeout) {
+                    connection.connect(config.host, config.port, config.useTls)
+                }
+            } catch (e: TimeoutCancellationException) {
+                throw MqttConnectionException(
+                    "Connection timed out after ${config.connectTimeout}",
+                    e
+                )
+            }
+        } else {
+            connection.connect(config.host, config.port, config.useTls)
+        }
 
         // Build CONNECT packet
         val connectProps = MqttProperties().apply {
@@ -143,6 +177,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         }
 
         isConnected = true
+        logger?.info(TAG) { "Connected to ${config.host}:${config.port}" }
 
         // Start background reader
         readJob = scope.launch { readLoop() }
@@ -199,9 +234,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     ) {
         if (!isConnected) return
 
+        userDisconnected = true
         isConnected = false
         keepAliveJob?.cancel()
         readJob?.cancel()
+
+        logger?.info(TAG) { "Disconnecting (reason=${reasonCode.name})" }
 
         try {
             val props = MqttProperties()
@@ -236,6 +274,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         properties: MqttProperties = MqttProperties(),
     ) {
         require(isConnected) { "Not connected" }
+
+        logger?.debug(TAG) { "Publishing to '$topic' (qos=${qos.value}, retain=$retain, ${payload.size} bytes)" }
 
         // Apply topic alias if available
         val aliasResult = topicAliasManagerOutbound.getOutboundAlias(topic)
@@ -315,6 +355,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         require(isConnected) { "Not connected" }
         require(subscriptions.isNotEmpty()) { "At least one subscription required" }
 
+        logger?.debug(TAG) { "Subscribing to ${subscriptions.map { it.topicFilter }}" }
+
         val packetId = packetIdManager.allocate()
         val deferred = CompletableDeferred<SubackPacket>()
         sessionState.pendingSuback[packetId] = deferred
@@ -363,6 +405,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     suspend fun unsubscribe(topicFilters: List<String>): List<ReasonCode> {
         require(isConnected) { "Not connected" }
         require(topicFilters.isNotEmpty()) { "At least one topic filter required" }
+
+        logger?.debug(TAG) { "Unsubscribing from $topicFilters" }
 
         val packetId = packetIdManager.allocate()
         val deferred = CompletableDeferred<UnsubackPacket>()
@@ -534,6 +578,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     }
 
     private suspend fun handleServerDisconnect(packet: DisconnectPacket) {
+        logger?.warn(TAG) { "Server sent DISCONNECT: ${packet.reasonCode.name}" }
         isConnected = false
         connection.close()
         onDisconnect?.invoke(
@@ -550,7 +595,10 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
     }
 
     private fun handleConnectionLost(cause: Throwable?) {
+        if (!isConnected) return
         isConnected = false
+        logger?.warn(TAG) { "Connection lost${cause?.let { ": ${it.message}" } ?: ""}" }
+
         onDisconnect?.invoke(cause)
 
         // Complete all pending operations with failure
@@ -559,6 +607,86 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         sessionState.pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
         sessionState.pendingSuback.values.forEach { it.completeExceptionally(error) }
         sessionState.pendingUnsuback.values.forEach { it.completeExceptionally(error) }
+
+        // Trigger auto-reconnect if configured
+        if (config.autoReconnect && !userDisconnected) {
+            clientScope?.launch { attemptReconnect() }
+        }
+    }
+
+    // ─────────────────── Auto-Reconnect ───────────────────
+
+    /**
+     * Attempts to reconnect to the broker with exponential backoff.
+     * Re-subscribes to previously active subscriptions upon success.
+     */
+    private suspend fun attemptReconnect() {
+        if (isReconnecting) return
+        isReconnecting = true
+
+        val maxAttempts = config.maxReconnectAttempts
+        var attempt = 0
+        var currentDelay = config.reconnectDelay
+
+        logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts" }
+
+        try {
+            while (true) {
+                attempt++
+                if (maxAttempts > 0 && attempt > maxAttempts) {
+                    logger?.error(TAG) { "Max reconnect attempts ($maxAttempts) reached, giving up" }
+                    break
+                }
+
+                logger?.info(TAG) { "Reconnection attempt $attempt${if (maxAttempts > 0) "/$maxAttempts" else ""}" }
+                onReconnecting?.invoke(attempt)
+
+                try {
+                    // Clean up old connection
+                    keepAliveJob?.cancel()
+                    readJob?.cancel()
+                    connection.close()
+
+                    // Attempt reconnect — use cleanStart=false to resume session if possible
+                    val savedCleanStart = config.cleanStart
+                    config.cleanStart = false
+
+                    try {
+                        connect()
+                    } finally {
+                        config.cleanStart = savedCleanStart
+                    }
+
+                    // Re-subscribe to previously active subscriptions
+                    val subscriptionsToRestore = sessionState.subscriptions.toMap()
+                    if (subscriptionsToRestore.isNotEmpty()) {
+                        logger?.info(TAG) { "Re-subscribing to ${subscriptionsToRestore.size} topics" }
+                        val subs = subscriptionsToRestore.map { (filter, qos) ->
+                            Subscription(filter, SubscriptionOptions(qos = qos))
+                        }
+                        try {
+                            subscribe(subs)
+                        } catch (e: Exception) {
+                            logger?.warn(TAG) { "Re-subscribe failed: ${e.message}" }
+                        }
+                    }
+
+                    logger?.info(TAG) { "Reconnected successfully" }
+                    onReconnected?.invoke()
+                    return // success
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logger?.warn(TAG) { "Reconnection attempt $attempt failed: ${e.message}" }
+                }
+
+                // Exponential backoff with jitter
+                delay(currentDelay)
+                currentDelay = (currentDelay * 2).coerceAtMost(config.maxReconnectDelay)
+            }
+        } finally {
+            isReconnecting = false
+        }
     }
 
     // ─────────────────── Re-authentication ───────────────────
@@ -581,5 +709,9 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             reasonCode = ReasonCode.RE_AUTHENTICATE,
             properties = props,
         ))
+    }
+
+    companion object {
+        private const val TAG = "MqttClient"
     }
 }

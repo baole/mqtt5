@@ -1,6 +1,4 @@
-import io.github.mqtt5.MqttClient
-import io.github.mqtt5.MqttMessage
-import io.github.mqtt5.QoS
+import io.github.mqtt5.*
 import io.github.mqtt5.protocol.MqttProperties
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.take
@@ -26,6 +24,18 @@ fun main() = runBlocking {
         clientId = "kmqtt5-sample-${System.currentTimeMillis()}"
         cleanStart = true
         keepAlive = 30.seconds
+        connectTimeout = 10.seconds
+
+        // Auto-reconnect with exponential backoff
+        autoReconnect = true
+        reconnectDelay = 1.seconds
+        maxReconnectDelay = 30.seconds
+        maxReconnectAttempts = 5
+
+        // Optional: enable logging
+        logger = MqttLogger(minLevel = MqttLogLevel.INFO) { level, tag, message ->
+            println("  [$level] $tag: $message")
+        }
 
         // Optional: set credentials
         // credentials("username", "password")
@@ -54,6 +64,14 @@ fun main() = runBlocking {
 
     client.onDisconnect = { cause ->
         println("[DISCONNECTED] ${cause?.message ?: "Normal disconnect"}")
+    }
+
+    client.onReconnecting = { attempt ->
+        println("[RECONNECTING] Attempt $attempt...")
+    }
+
+    client.onReconnected = {
+        println("[RECONNECTED] Connection restored, subscriptions re-established.")
     }
 
     try {
