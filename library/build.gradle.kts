@@ -11,8 +11,14 @@ val mavenVersion = "0.0.1"
 kotlin {
     jvm()
 
+    // Apple targets
+    iosArm64()
+    iosX64()
+    iosSimulatorArm64()
     macosArm64()
     macosX64()
+
+    // Linux
     linuxX64()
 
     sourceSets {
@@ -32,12 +38,8 @@ kotlin {
 mavenPublishing {
     publishToMavenCentral()
 
-    // Only sign when signing credentials are available (CI or explicit local config)
-    val signingKey = providers.gradleProperty("signingInMemoryKey").orNull
-        ?: providers.environmentVariable("ORG_GRADLE_PROJECT_signingInMemoryKey").orNull
-    if (signingKey != null) {
-        signAllPublications()
-    }
+    // Configure signing to work with both local keyring and GitHub Actions in-memory keys
+    signAllPublications()
 
     coordinates(mavenGroup, mavenArtifactId, mavenVersion)
 

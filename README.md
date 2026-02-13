@@ -2,7 +2,7 @@
 
 [![Build & Test](https://github.com/baole/kmqtt5/actions/workflows/build.yml/badge.svg)](https://github.com/baole/kmqtt5/actions/workflows/build.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.baole/kmqtt5.svg)](https://central.sonatype.com/artifact/io.github.baole/kmqtt5)
-[![Kotlin](https://img.shields.io/badge/kotlin-2.1.10-blue.svg)](https://kotlinlang.org)
+[![Kotlin](https://img.shields.io/badge/kotlin-2.3.10-blue.svg)](https://kotlinlang.org)
 
 A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html), using [Ktor](https://ktor.io/) for networking. No third-party MQTT libraries are used.
 
@@ -25,7 +25,7 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 
 ### Library Design
 
-- **Kotlin Multiplatform**: targets JVM, macOS (arm64/x64), Linux (x64)
+- **Kotlin Multiplatform**: targets JVM/Android, iOS (arm64/x64/simulator), macOS (arm64/x64), Linux (x64)
 - **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS
 - **Coroutine-based**: fully suspending API built on Kotlin coroutines
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
@@ -248,8 +248,8 @@ client.publish(
 
 ## Requirements
 
-- Kotlin 2.1.10+
-- Ktor 3.1.1+
+- Kotlin 2.3.10+
+- Ktor 3.4.0+
 - JDK 17+ (for JVM target)
 
 ## Architecture
