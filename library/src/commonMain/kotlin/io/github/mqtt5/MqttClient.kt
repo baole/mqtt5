@@ -430,11 +430,11 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         // Atomically guard against concurrent reconnection attempts
         val acquired = reconnectGuard.tryLock()
         if (!acquired) return
-        isReconnecting = true
-        val strategy = config.effectiveReconnectStrategy()
-        var attempt = 0
-        logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts (strategy: ${strategy::class.simpleName})" }
         try {
+            isReconnecting = true
+            val strategy = config.effectiveReconnectStrategy()
+            var attempt = 0
+            logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts (strategy: ${strategy::class.simpleName})" }
             while (true) {
                 attempt++
                 val waitDuration = strategy.nextDelay(attempt, connectionLostCause)
