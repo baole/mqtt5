@@ -22,12 +22,32 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 - **Re-Authentication**: initiate re-authentication on an active connection
 - **Reason Codes**: comprehensive reason code support on all acknowledgment packets
 - **Server Capability Discovery**: Maximum QoS, Retain Available, Wildcard/Shared/Subscription-ID availability
+- **Plain TCP & TLS/SSL**: supports both unencrypted (port 1883) and secure (port 8883) connections with custom TLS configuration (custom CA, mTLS)
+
+### Reliability & Observability
+
+- **Auto-Reconnect**: pluggable reconnection strategy (exponential backoff, constant delay, linear backoff, or fully custom) upon unexpected disconnection; re-subscribes to previously active topics on successful reconnect
+- **QoS 1/2 Retry on Reconnect**: per MQTT v5 Section 4.4, unacknowledged QoS 1/2 messages are automatically resent with the DUP flag when the session is resumed after reconnect
+- **Offline Message Queue**: publish while disconnected -- messages are buffered and sent automatically when the connection is restored (configurable capacity, drops oldest when full)
+- **Connection State Flow**: reactive `StateFlow<ConnectionState>` (DISCONNECTED, CONNECTING, CONNECTED, DISCONNECTING, RECONNECTING) for driving UI in Compose / SwiftUI
+- **Connect Timeout**: configurable timeout for the initial TCP/TLS connection handshake
+- **Logging**: optional callback-based logger with configurable log levels (DEBUG, INFO, WARN, ERROR) and lazy message evaluation for zero-cost when disabled
+
+### Supported Platforms
+
+| Platform | Targets |
+|----------|---------|
+| **JVM** | JVM 17+, Android |
+| **iOS** | iosArm64, iosX64, iosSimulatorArm64 |
+| **macOS** | macosArm64 (Apple Silicon), macosX64 (Intel) |
+| **Linux** | linuxX64 |
 
 ### Library Design
 
-- **Kotlin Multiplatform**: targets JVM/Android, iOS (arm64/x64/simulator), macOS (arm64/x64), Linux (x64)
-- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS
+- **Ktor Networking**: uses `ktor-network` for raw TCP sockets and `ktor-network-tls` for TLS/SSL with custom configuration support
 - **Coroutine-based**: fully suspending API built on Kotlin coroutines
+- **Reactive State**: `StateFlow<ConnectionState>` for UI binding + `SharedFlow` for messages
+- **Spec-compliant Session Resumption**: QoS 1/2 message retry with DUP flag per MQTT v5 Section 4.4
 - **Dual Message Delivery**: `SharedFlow`-based reactive API and callback-based listener
 - **Zero third-party MQTT dependencies**: the entire protocol is implemented from scratch
 
@@ -118,6 +138,155 @@ fun main() = runBlocking {
 }
 ```
 
+### Connection State (for UI)
+
+```kotlin
+// StateFlow — collect in Compose, SwiftUI, or any coroutine scope
+client.connectionState.collect { state ->
+    when (state) {
+        ConnectionState.CONNECTED -> showOnlineIndicator()
+        ConnectionState.CONNECTING -> showSpinner()
+        ConnectionState.RECONNECTING -> showReconnectingBanner()
+        ConnectionState.DISCONNECTING -> showDisconnecting()
+        ConnectionState.DISCONNECTED -> showOfflineIndicator()
+    }
+}
+
+// Or read the current value synchronously
+if (client.connectionState.value == ConnectionState.CONNECTED) { /* ... */ }
+```
+
+### Auto-Reconnect & Reconnect Strategy
+
+When the connection drops unexpectedly, the client can automatically reconnect
+using a configurable **reconnect strategy**. On success it re-subscribes to all
+previously active topics and flushes any messages that were queued while offline.
+
+#### Quick start (shorthand properties)
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    clientId = "reliable-client"
+    autoReconnect = true
+
+    // Shorthand — builds an ExponentialBackoff under the hood
+    reconnectDelay = 1.seconds         // initial delay (doubles each attempt)
+    maxReconnectDelay = 60.seconds     // cap for exponential backoff
+    maxReconnectAttempts = 0           // 0 = unlimited
+}
+```
+
+#### Built-in strategies
+
+Set `reconnectStrategy` for full control. When set, it takes precedence over the
+shorthand properties above.
+
+| Strategy | Behaviour |
+|---|---|
+| `ExponentialBackoff` | Delay doubles each attempt with optional random jitter (default) |
+| `ConstantDelay` | Fixed delay between every attempt |
+| `LinearBackoff` | Delay grows by a fixed step each attempt |
+| `ReconnectStrategy.None` | Never reconnect (useful with offline queue only) |
+
+```kotlin
+// Exponential backoff with jitter — avoids thundering herd in IoT fleets
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    reconnectStrategy = ExponentialBackoff(
+        initialDelay = 1.seconds,
+        maxDelay = 30.seconds,
+        maxAttempts = 20,
+        jitterFactor = 0.25,   // adds up to 25 % random jitter
+    )
+}
+
+// Constant 5-second delay, max 10 attempts
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    reconnectStrategy = ConstantDelay(delay = 5.seconds, maxAttempts = 10)
+}
+
+// Linear backoff: 1 s, 3 s, 5 s, 7 s, … capped at 30 s
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    reconnectStrategy = LinearBackoff(
+        initialDelay = 1.seconds,
+        step = 2.seconds,
+        maxDelay = 30.seconds,
+    )
+}
+```
+
+#### Fully custom strategy (SAM lambda)
+
+Implement `ReconnectStrategy` with a single lambda. Return the delay before the
+next attempt, or `null` to stop reconnecting.
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    reconnectStrategy = ReconnectStrategy { attempt, cause ->
+        // Server explicitly refused — don't bother retrying
+        if (cause is MqttConnectException) null
+        // Transient error — linear 2 s, 4 s, 6 s … capped at 30 s
+        else (attempt * 2).seconds.coerceAtMost(30.seconds)
+    }
+}
+```
+
+#### Offline message queue
+
+Messages published while disconnected are buffered and sent automatically once
+the connection is restored.
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    autoReconnect = true
+    offlineQueueCapacity = 100   // 0 = unlimited; drops oldest when full
+}
+
+// Works even while disconnected
+client.publish("sensor/temp", "22.5", QoS.AT_LEAST_ONCE)
+println("Queued: ${client.offlineQueueSize}")
+```
+
+#### Reconnection callbacks
+
+```kotlin
+client.onReconnecting = { attempt ->
+    println("Reconnecting… attempt $attempt")
+}
+client.onReconnected = {
+    println("Reconnected! Subscriptions and queued messages restored.")
+}
+```
+
+### Connect Timeout
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    connectTimeout = 10.seconds  // fail fast if broker is unreachable
+}
+```
+
+### Logging
+
+```kotlin
+val client = MqttClient {
+    host = "broker.example.com"
+    logger = MqttLogger(minLevel = MqttLogLevel.DEBUG) { level, tag, message ->
+        println("[$level] $tag: $message")
+    }
+}
+```
+
 ### Authentication
 
 ```kotlin
@@ -127,6 +296,40 @@ val client = MqttClient {
     useTls = true
     clientId = "secure-client"
     credentials("username", "password")
+}
+```
+
+### Custom TLS Configuration
+
+The `tls {}` helper enables TLS and gives access to Ktor's `TLSConfigBuilder` for
+platform-specific settings such as custom trust managers and client certificates.
+
+```kotlin
+// Basic TLS (system trust store)
+val client = MqttClient {
+    host = "broker.example.com"
+    port = 8883
+    tls()  // enables TLS with default (system) trust store
+}
+
+// Custom CA certificate (JVM) — e.g., for AWS IoT Core, Azure IoT Hub
+val client = MqttClient {
+    host = "iot.example.com"
+    port = 8883
+    tls {
+        trustManager = myCustomTrustManager  // JVM: javax.net.ssl.TrustManager
+    }
+}
+
+// Mutual TLS (mTLS) with client certificates (JVM)
+val client = MqttClient {
+    host = "iot.example.com"
+    port = 8883
+    tls {
+        trustManager = myCustomTrustManager
+        // Add client certificate for mutual authentication
+        addKeyStore(keyStore, keyPassword)
+    }
 }
 ```
 
@@ -148,7 +351,7 @@ val client = MqttClient {
 ### Request/Response Pattern
 
 ```kotlin
-import io.github.mqtt5.protocol.MqttProperties
+import io.github.mqtt5.MqttProperties
 
 // Requester
 val requestProps = MqttProperties().apply {

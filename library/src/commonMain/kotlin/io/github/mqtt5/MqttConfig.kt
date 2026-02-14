@@ -1,6 +1,6 @@
 package io.github.mqtt5
 
-import io.github.mqtt5.protocol.MqttProperties
+import io.ktor.network.tls.TLSConfigBuilder
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -63,6 +63,40 @@ class MqttConfig {
     /** Whether to use TLS. */
     var useTls: Boolean = false
 
+    /**
+     * Custom TLS configuration block applied to Ktor's [TLSConfigBuilder].
+     * Use the [tls] helper to set this and enable TLS automatically.
+     *
+     * On JVM, the builder gives access to `trustManager` (for custom CA certificates)
+     * and client certificate configuration for mutual TLS (mTLS).
+     */
+    var tlsConfig: (TLSConfigBuilder.() -> Unit)? = null
+
+    /**
+     * Enable TLS with optional custom configuration.
+     *
+     * The [block] is applied to Ktor's [TLSConfigBuilder], giving access to
+     * platform-specific TLS settings. On JVM this includes custom trust managers
+     * and client certificates for mutual TLS (mTLS), commonly required for
+     * AWS IoT Core, Azure IoT Hub, and similar cloud IoT platforms.
+     *
+     * Calling this automatically sets [useTls] to `true`.
+     *
+     * ```kotlin
+     * // Basic TLS (system trust store)
+     * tls()
+     *
+     * // Custom CA / mTLS (JVM)
+     * tls {
+     *     trustManager = myCustomTrustManager
+     * }
+     * ```
+     */
+    fun tls(block: TLSConfigBuilder.() -> Unit = {}) {
+        useTls = true
+        tlsConfig = block
+    }
+
     // --- Will Message Configuration ---
 
     /** Will message configuration, or null if no will message. */
@@ -74,11 +108,67 @@ class MqttConfig {
     /** Whether to automatically reconnect on connection loss. */
     var autoReconnect: Boolean = false
 
-    /** Delay between reconnection attempts. */
-    var reconnectDelay: Duration = 5.seconds
+    /**
+     * Strategy that controls reconnection timing and stopping criteria.
+     *
+     * When set, this takes precedence over [reconnectDelay], [maxReconnectDelay],
+     * and [maxReconnectAttempts]. If `null` (default), an [ExponentialBackoff] strategy
+     * is built automatically from those three properties for backward compatibility.
+     *
+     * ```kotlin
+     * // Exponential backoff with jitter (avoid thundering herd)
+     * reconnectStrategy = ExponentialBackoff(
+     *     initialDelay = 1.seconds,
+     *     maxDelay = 30.seconds,
+     *     jitterFactor = 0.25,
+     * )
+     *
+     * // Constant 5-second delay, max 10 attempts
+     * reconnectStrategy = ConstantDelay(delay = 5.seconds, maxAttempts = 10)
+     *
+     * // Fully custom logic via SAM interface
+     * reconnectStrategy = ReconnectStrategy { attempt, cause ->
+     *     if (cause is MqttConnectException) null else (attempt * 2).seconds
+     * }
+     * ```
+     */
+    var reconnectStrategy: ReconnectStrategy? = null
 
-    /** Maximum number of reconnection attempts. 0 means unlimited. */
+    /** Initial delay between reconnection attempts. Increases with exponential backoff.
+     *  Ignored when [reconnectStrategy] is set explicitly. */
+    var reconnectDelay: Duration = 1.seconds
+
+    /** Maximum delay between reconnection attempts (caps exponential backoff).
+     *  Ignored when [reconnectStrategy] is set explicitly. */
+    var maxReconnectDelay: Duration = 60.seconds
+
+    /** Maximum number of reconnection attempts. 0 means unlimited.
+     *  Ignored when [reconnectStrategy] is set explicitly. */
     var maxReconnectAttempts: Int = 0
+
+    /**
+     * Resolves the effective [ReconnectStrategy].
+     *
+     * Returns the explicitly set [reconnectStrategy], or builds a default
+     * [ExponentialBackoff] from [reconnectDelay], [maxReconnectDelay], and
+     * [maxReconnectAttempts] for backward compatibility.
+     */
+    internal fun effectiveReconnectStrategy(): ReconnectStrategy =
+        reconnectStrategy ?: ExponentialBackoff(
+            initialDelay = reconnectDelay,
+            maxDelay = maxReconnectDelay,
+            maxAttempts = maxReconnectAttempts,
+        )
+
+    /**
+     * Maximum number of messages to buffer when disconnected and [autoReconnect] is enabled.
+     * When the queue is full, the oldest message is dropped to make room.
+     * Set to 0 for unlimited queue size.
+     */
+    var offlineQueueCapacity: Int = 100
+
+    /** Optional logger for debugging and monitoring. */
+    var logger: MqttLogger? = null
 
     /** Helper to set username/password. */
     fun credentials(username: String, password: String? = null) {

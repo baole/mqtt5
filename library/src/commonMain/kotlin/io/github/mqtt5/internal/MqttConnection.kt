@@ -5,7 +5,8 @@ import io.github.mqtt5.MqttProtocolException
 import io.github.mqtt5.protocol.*
 import io.ktor.network.selector.*
 import io.ktor.network.sockets.*
-import io.ktor.network.tls.*
+import io.ktor.network.tls.TLSConfigBuilder
+import io.ktor.network.tls.tls
 import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlin.coroutines.cancellation.CancellationException
@@ -32,8 +33,11 @@ internal class MqttConnection {
 
     /**
      * Open a TCP connection to the broker, optionally upgrading to TLS.
+     *
+     * @param tlsConfig Optional custom TLS configuration block applied to Ktor's TLSConfigBuilder.
+     *                  Allows setting custom trust managers (JVM), client certificates, etc.
      */
-    suspend fun connect(host: String, port: Int, useTls: Boolean = false) {
+    suspend fun connect(host: String, port: Int, useTls: Boolean = false, tlsConfig: (TLSConfigBuilder.() -> Unit)? = null) {
         try {
             val sm = SelectorManager(Dispatchers.Default)
             selectorManager = sm
@@ -43,7 +47,8 @@ internal class MqttConnection {
 
             if (useTls) {
                 rawSocket = rawSocket.tls(coroutineContext) {
-                    // Use default TLS settings (system trust store)
+                    serverName = host
+                    tlsConfig?.invoke(this)
                 }
             }
 

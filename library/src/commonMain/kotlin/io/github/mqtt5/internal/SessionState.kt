@@ -27,10 +27,10 @@ internal class SessionState {
     val pendingQos2Inbound = mutableSetOf<Int>()
 
     /** Pending subscribe acknowledgements. */
-    val pendingSuback = mutableMapOf<Int, CompletableDeferred<SubackPacket>>()
+    private val pendingSuback = mutableMapOf<Int, CompletableDeferred<SubackPacket>>()
 
     /** Pending unsubscribe acknowledgements. */
-    val pendingUnsuback = mutableMapOf<Int, CompletableDeferred<UnsubackPacket>>()
+    private val pendingUnsuback = mutableMapOf<Int, CompletableDeferred<UnsubackPacket>>()
 
     /** Active subscriptions: topicFilter -> QoS. */
     val subscriptions = mutableMapOf<String, QoS>()
@@ -49,6 +49,13 @@ internal class SessionState {
 
     /** Current send quota for flow control. */
     var sendQuota: Int = 65535
+
+    /** Whether the server indicated a session was present in the latest CONNACK. */
+    var sessionPresent: Boolean = false
+
+    /** In-flight QoS 1/2 messages saved for retry on reconnect (MQTT v5 Section 4.4). */
+    var inflightForRetry: List<InflightMessage> = emptyList()
+        private set
 
     suspend fun addPendingPuback(packetId: Int, publish: PendingPublish) = mutex.withLock {
         pendingPuback[packetId] = publish
@@ -82,7 +89,75 @@ internal class SessionState {
         packetId in pendingQos2Inbound
     }
 
+    suspend fun addPendingSuback(packetId: Int, deferred: CompletableDeferred<SubackPacket>) = mutex.withLock {
+        pendingSuback[packetId] = deferred
+    }
+
+    suspend fun completePendingSuback(packetId: Int, packet: SubackPacket) = mutex.withLock {
+        pendingSuback[packetId]?.complete(packet)
+    }
+
+    suspend fun removePendingSuback(packetId: Int) = mutex.withLock {
+        pendingSuback.remove(packetId)
+    }
+
+    suspend fun addPendingUnsuback(packetId: Int, deferred: CompletableDeferred<UnsubackPacket>) = mutex.withLock {
+        pendingUnsuback[packetId] = deferred
+    }
+
+    suspend fun completePendingUnsuback(packetId: Int, packet: UnsubackPacket) = mutex.withLock {
+        pendingUnsuback[packetId]?.complete(packet)
+    }
+
+    suspend fun removePendingUnsuback(packetId: Int) = mutex.withLock {
+        pendingUnsuback.remove(packetId)
+    }
+
+    /**
+     * Fail all pending subscribe/unsubscribe deferreds and clear the maps.
+     */
+    suspend fun failPendingSubackAndUnsuback(error: Exception) = mutex.withLock {
+        pendingSuback.values.forEach { it.completeExceptionally(error) }
+        pendingUnsuback.values.forEach { it.completeExceptionally(error) }
+        pendingSuback.clear()
+        pendingUnsuback.clear()
+    }
+
+    /**
+     * Save in-flight QoS 1/2 messages for retry on reconnect.
+     * Must be called before completing pending deferreds and before clearForReconnect().
+     */
+    suspend fun saveInflightForRetry() = mutex.withLock {
+        val messages = mutableListOf<InflightMessage>()
+        for ((id, pending) in pendingPuback) {
+            messages.add(InflightMessage(id, pending.packet))
+        }
+        for ((id, state) in pendingQos2Outbound) {
+            messages.add(InflightMessage(id, state.packet, state.pubrecReceived))
+        }
+        inflightForRetry = messages
+    }
+
+    suspend fun clearInflightRetry() = mutex.withLock {
+        inflightForRetry = emptyList()
+    }
+
+    /**
+     * Fail all pending QoS 1/2 deferreds exceptionally and clear the maps.
+     * Must be called under the mutex to avoid races with the read loop.
+     * NOTE: does NOT clear inflightForRetry — those messages were saved by
+     * saveInflightForRetry() BEFORE this call and must survive until
+     * retryInflightMessages() processes them on the next successful connect.
+     */
+    suspend fun failAndClearPending(error: Exception) = mutex.withLock {
+        pendingPuback.values.forEach { it.deferred.completeExceptionally(error) }
+        pendingQos2Outbound.values.forEach { it.deferred.completeExceptionally(error) }
+        pendingPuback.clear()
+        pendingQos2Outbound.clear()
+    }
+
     fun updateFromConnack(connack: ConnackPacket) {
+        sessionPresent = connack.sessionPresent
         val props = connack.properties
         props.maximumQos?.let { serverMaxQos = it }
         props.retainAvailable?.let { serverRetainAvailable = it == 1 }
@@ -100,7 +175,7 @@ internal class SessionState {
      * Clear transient state for a new connection while keeping subscriptions
      * if session is being resumed.
      */
-    fun clearForReconnect(cleanStart: Boolean) {
+    suspend fun clearForReconnect(cleanStart: Boolean) = mutex.withLock {
         pendingPuback.clear()
         pendingQos2Outbound.clear()
         pendingQos2Inbound.clear()
@@ -128,4 +203,14 @@ internal data class Qos2OutboundState(
     val packet: PublishPacket,
     val deferred: CompletableDeferred<Unit> = CompletableDeferred(),
     var pubrecReceived: Boolean = false,
+)
+
+/**
+ * Represents an in-flight QoS 1/2 message saved for retry on reconnect.
+ * Per MQTT v5 Section 4.4, these must be resent with the DUP flag when a session is resumed.
+ */
+internal data class InflightMessage(
+    val packetId: Int,
+    val packet: PublishPacket,
+    val pubrecReceived: Boolean = false,
 )
