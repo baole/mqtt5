@@ -144,6 +144,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         _connectionState.value = ConnectionState.DISCONNECTING
         keepAliveJob?.cancel(); readJob?.cancel()
         failPendingQosMessages(MqttConnectionException("Client disconnected"))
+        sessionState.failPendingSubackAndUnsuback(MqttConnectionException("Client disconnected"))
         logger?.info(TAG) { "Disconnecting (reason=${reasonCode.name})" }
         try {
             val props = MqttProperties(); sessionExpiryInterval?.let { props.sessionExpiryInterval = it }
@@ -333,8 +334,8 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         require(isConnected) { "Not connected" }; require(subscriptions.isNotEmpty()) { "At least one subscription required" }
         val packetId = packetIdManager.allocate()
         val deferred = CompletableDeferred<SubackPacket>(); sessionState.addPendingSuback(packetId, deferred)
-        connection.sendPacket(SubscribePacket(packetId = packetId, subscriptions = subscriptions.map { it.topicFilter to it.options }))
         try {
+            connection.sendPacket(SubscribePacket(packetId = packetId, subscriptions = subscriptions.map { it.topicFilter to it.options }))
             val suback = deferred.await()
             for ((i, sub) in subscriptions.withIndex()) { val rc = suback.reasonCodes.getOrNull(i); if (rc != null && !rc.isError) sessionState.subscriptions[sub.topicFilter] = sub.options.qos }
             return suback.reasonCodes
@@ -348,13 +349,12 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         require(isConnected) { "Not connected" }; require(topicFilters.isNotEmpty()) { "At least one topic filter required" }
         val packetId = packetIdManager.allocate()
         val deferred = CompletableDeferred<UnsubackPacket>(); sessionState.addPendingUnsuback(packetId, deferred)
-        connection.sendPacket(UnsubscribePacket(packetId = packetId, topicFilters = topicFilters))
         try {
+            connection.sendPacket(UnsubscribePacket(packetId = packetId, topicFilters = topicFilters))
             val unsuback = deferred.await()
             for ((i, f) in topicFilters.withIndex()) { val rc = unsuback.reasonCodes.getOrNull(i); if (rc != null && !rc.isError) sessionState.subscriptions.remove(f) }
             return unsuback.reasonCodes
-        }
-        finally { sessionState.removePendingUnsuback(packetId); packetIdManager.release(packetId) }
+        } finally { sessionState.removePendingUnsuback(packetId); packetIdManager.release(packetId) }
     }
 
     suspend fun unsubscribe(topicFilter: String): ReasonCode = unsubscribe(listOf(topicFilter)).first()
@@ -405,6 +405,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
         logger?.warn(TAG) { "Server sent DISCONNECT: ${packet.reasonCode.name}" }
         isConnected = false
         failPendingQosMessages(MqttConnectionException("Server disconnected: ${packet.reasonCode.name}"))
+        sessionState.failPendingSubackAndUnsuback(MqttConnectionException("Server disconnected: ${packet.reasonCode.name}"))
         _connectionState.value = ConnectionState.DISCONNECTED; connection.close()
         onDisconnect?.invoke(MqttException("Server disconnected: ${packet.reasonCode.name} - ${packet.properties.reasonString ?: ""}"))
     }
@@ -435,10 +436,13 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             isReconnecting = true
             val strategy = config.effectiveReconnectStrategy()
             var attempt = 0
+            // Track the latest failure cause so the strategy can react to it
+            // (e.g., stop retrying when the server explicitly refuses with MqttConnectException)
+            var lastCause: Throwable? = connectionLostCause
             logger?.info(TAG) { "Auto-reconnect enabled, starting reconnection attempts (strategy: ${strategy::class.simpleName})" }
             while (true) {
                 attempt++
-                val waitDuration = strategy.nextDelay(attempt, connectionLostCause)
+                val waitDuration = strategy.nextDelay(attempt, lastCause)
                 if (waitDuration == null) {
                     logger?.error(TAG) { "Reconnect strategy returned null at attempt $attempt — giving up" }
                     failPendingQosMessages(MqttConnectionException("Reconnect strategy stopped after $attempt attempts"))
@@ -454,7 +458,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
                     if (subs.isNotEmpty()) { try { subscribe(subs.map { (f, q) -> Subscription(f, SubscriptionOptions(qos = q)) }) } catch (e: Exception) { logger?.warn(TAG) { "Re-subscribe failed: ${e.message}" } } }
                     logger?.info(TAG) { "Reconnected successfully" }; onReconnected?.invoke(); return
                 } catch (e: CancellationException) { throw e }
-                catch (e: Exception) { logger?.warn(TAG) { "Reconnection attempt $attempt failed: ${e.message}" }; _connectionState.value = ConnectionState.RECONNECTING }
+                catch (e: Exception) { lastCause = e; logger?.warn(TAG) { "Reconnection attempt $attempt failed: ${e.message}" }; _connectionState.value = ConnectionState.RECONNECTING }
                 delay(waitDuration)
             }
         } finally { isReconnecting = false; reconnectGuard.unlock() }
