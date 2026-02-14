@@ -6,28 +6,20 @@ plugins {
 // Maven coordinates
 val mavenGroup = "io.github.baole"
 val mavenArtifactId = "kmqtt5"
-val mavenVersion = "1.2.0"
+val mavenVersion = "1.1.0"
 
 kotlin {
     jvm()
 
-    // Apple
-    macosX64(); macosArm64()
-    iosArm64(); iosX64(); iosSimulatorArm64()
-    tvosArm64(); tvosX64(); tvosSimulatorArm64()
-    watchosArm32(); watchosArm64(); watchosX64(); watchosSimulatorArm64(); watchosDeviceArm64()
+    // Apple targets
+    iosArm64()
+    iosX64()
+    iosSimulatorArm64()
+    macosArm64()
+    macosX64()
 
-    // Linux & Windows
-    linuxX64(); linuxArm64()
-    mingwX64()
-
-    // Android Native (NDK)
-    androidNativeArm32(); androidNativeArm64(); androidNativeX64(); androidNativeX86()
-
-    // JS & Wasm (Node.js only – raw TCP sockets are not available in browsers)
-    js { nodejs() }
-    @OptIn(org.jetbrains.kotlin.gradle.ExperimentalWasmDsl::class)
-    wasmJs { nodejs() }
+    // Linux
+    linuxX64()
 
     sourceSets {
         commonMain.dependencies {
