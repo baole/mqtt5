@@ -37,10 +37,19 @@ A pure Kotlin Multiplatform implementation of the [MQTT v5.0 protocol](https://d
 
 | Platform | Targets |
 |----------|---------|
-| **JVM** | JVM 17+, Android |
+| **JVM** | JVM 17+, Android (via JVM artifact) |
 | **iOS** | iosArm64, iosX64, iosSimulatorArm64 |
 | **macOS** | macosArm64 (Apple Silicon), macosX64 (Intel) |
-| **Linux** | linuxX64 |
+| **tvOS** | tvosArm64, tvosX64, tvosSimulatorArm64 |
+| **watchOS** | watchosArm32, watchosArm64, watchosX64, watchosSimulatorArm64, watchosDeviceArm64 |
+| **Linux** | linuxX64, linuxArm64 |
+| **Windows** | mingwX64 |
+| **Android NDK** | androidNativeArm32, androidNativeArm64, androidNativeX64, androidNativeX86 |
+| **JavaScript** | Node.js (via Kotlin/JS) |
+| **WebAssembly** | Node.js (via Kotlin/WasmJs) |
+
+> **Note:** JS and WasmJs targets work in **Node.js** environments only. Raw TCP sockets
+> are not available in browsers; for browser-based MQTT you would need MQTT-over-WebSocket.
 
 ### Library Design
 
@@ -61,7 +70,7 @@ repositories {
 }
 
 dependencies {
-    implementation("io.github.baole:kmqtt5:1.0.0")
+    implementation("io.github.baole:kmqtt5:1.2.0")
 }
 ```
 
@@ -73,7 +82,7 @@ For Kotlin Multiplatform projects, add the dependency in the `commonMain` source
 kotlin {
     sourceSets {
         commonMain.dependencies {
-            implementation("io.github.baole:kmqtt5:1.0.0")
+            implementation("io.github.baole:kmqtt5:1.2.0")
         }
     }
 }
@@ -83,7 +92,7 @@ kotlin {
 
 ```toml
 [versions]
-kmqtt5 = "1.0.0"
+kmqtt5 = "1.2.0"
 
 [libraries]
 kmqtt5 = { module = "io.github.baole:kmqtt5", version.ref = "kmqtt5" }
