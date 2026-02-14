@@ -98,6 +98,7 @@ class MqttClient(configure: MqttConfig.() -> Unit = {}) {
             retryInflightMessages()
             flushOfflineQueue()
         } catch (e: Exception) {
+            isConnected = false
             _connectionState.value = ConnectionState.DISCONNECTED
             throw e
         }
